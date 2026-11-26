@@ -220,6 +220,13 @@ class Game:
             p.throttle[key] = self.tick
         p.events.append((self.tick, kind, text))
 
+    def river(self, a, b):
+        """Is the border a-b a river that counts now? (a frozen river is no obstacle)"""
+        return b in self.provs[a].river and not (a in self.cold and b in self.cold)
+
+    def bridged(self, pid, a, b):
+        return self.owner[a] == pid and self.owner[b] == pid and self.infra[a] >= D.RIVER_BRIDGE and self.infra[b] >= D.RIVER_BRIDGE
+
     def move_cost(self, u, prov):
         pr = self.provs[prov]
         return pr.cost / u.st["spd"] * (u.st["climb"] if pr.terrain in D.HIGH else 1.0) * (D.COLD_MOVE if prov in self.cold else 1.0) / (1.0 + D.INFRA_MOVE * self.infra[prov])
@@ -268,6 +275,7 @@ class Game:
                 if own is not None and self.owner[b] != own: continue
                 if known is not None and b not in known and b != dst: continue
                 nd = d + (self.move_cost(unit, b) if unit else provs[b].cost)
+                if b in provs[a].river and self.river(a, b) and not (unit and self.bridged(unit.owner, a, b)): nd += provs[a].cost * 0.5 * (1.0 / D.RIVER_MOVE - 1.0) / (unit.st["spd"] if unit else 1.0)
                 if nd < dist.get(b, 1e18):
                     dist[b] = nd; prev[b] = a; pb = provs[b]
                     heapq.heappush(heap, (nd + k * ((pb.cx - tx) ** 2 + (pb.cy - ty) ** 2) ** 0.5, b))
@@ -705,7 +713,9 @@ class Game:
 
     def _econ_day(self):
         """Once a day: cities grow where the market is good and there is room, upkeep is charged, and what cannot be kept up decays."""
-        dev = self.dev; infra = self.infra; fought = set(self.battles)
+        dev = self.dev; infra = self.infra; fought = set(self.battles); fort = self.fort; pos = self.pos; own = self.owner
+        for i in range(self.n):                                  # unmanned works fall in
+            if fort[i] > 0.0 and own[i] >= 0 and not any(u.owner == own[i] for u in pos[i]): fort[i] = max(0.0, fort[i] - D.FORT_DECAY)
         for p in self.players:
             if not p.alive: p.maint = 0.0; continue
             m = 0.0; broke = p.res <= 0.0 and p.income < p.upkeep + p.maint
@@ -829,7 +839,9 @@ class Game:
         stock = self.stock; p = self.players[u.owner]; pr = u.prov; fighting = u.fighting
         if fighting == 1: use = D.USE_ASSAULT; dr = D.RDY_ASSAULT
         elif fighting == 2: use = D.USE_DEFEND; dr = D.RDY_DEFEND
-        elif u.path: use = D.USE_IDLE; dr = D.RDY_MOVE
+        elif u.path:
+            use = D.USE_IDLE
+            dr = D.RDY_MOVE if u.contact or u.rout or self.owner[pr] != u.owner or pr not in p.supplied else D.RDY_RAIL if self.infra[pr] >= 1.0 else D.RDY_MARCH
         elif u.contact: use = D.USE_CONTACT; dr = D.RDY_CONTACT
         else: use = D.USE_IDLE; dr = D.RDY_REST
         use *= k; d = self.depot(u)
@@ -974,6 +986,7 @@ class Game:
                     if tf is None: tf = tfc[(u.type, up, tp)] = self._ground(u.type, up, tp)
                     pw = m0 * tf
                     if u.plan_t == tp: pw *= 1.0 + u.plan_b * 0.01
+                    if adv and tp in provs[up].river and self.river(up, tp): pw *= D.RIVER_ATK      # an opposed river crossing
                     h = t.st["hard"]
                     if h: pw *= 1.0 + h * ap1                          # armour shrugs off soft weapons; anti-tank weapons tear it open
                     if not t.path:                                   # standing: cover from terrain, and from the fort at home
@@ -1129,6 +1142,7 @@ class Game:
                 if 0 <= cx < gw and 0 <= cy < gh and cell[cy * gw + cx] == nxt:       # crossed the border
                     self._enter(u, nxt); here = nxt
             step = D.SPAN / self.move_cost(u, here)
+            if nxt != here and nxt in provs[here].river and self.river(here, nxt) and not self.bridged(u.owner, here, nxt): step *= D.RIVER_MOVE
             if step >= d:
                 u.x = tx; u.y = ty
                 if u.prov != nxt: self._enter(u, nxt)

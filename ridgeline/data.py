@@ -282,3 +282,11 @@ DEV_DECAY = 0.01                                            # lost a day when th
 DEV_SACK = 0.6; INFRA_SACK = 0.75                           # what is left after a province is taken by force
 DEV_BATTLE = 0.004                                          # development lost per hour while a battle is fought in the province
 INFRA_MOVE = 0.2; INFRA_HOP = 0.5; INFRA_HUB = 0.25         # movement cost / (1 + MOVE * L); supply distance of a province / (1 + HOP * L); depot capacity * (1 + HUB * L)
+
+# --- v10: great rivers (world map). A border a river runs through is a river border (Prov.river)
+RIVER_ATK = 0.65        # fire of an ADVANCING unit at targets on the far bank (an opposed crossing); units holding their bank fire normally
+RIVER_MOVE = 0.45       # speed of a unit on its way to the far bank (finding boats, building bridges)
+RIVER_BRIDGE = 1        # infrastructure level on both banks, both yours, at which your own units cross at normal speed (bridges; blown when a bank is lost)
+RDY_MARCH = -0.15       # readiness per hour marching through your own supplied land, out of contact (an administrative march); RDY_MOVE applies everywhere else
+RDY_RAIL = 0.0          # ... and where that province has infrastructure 1 or more (troops moved by rail arrive fresh)
+FORT_DECAY = 0.08       # fort levels lost per day in a province where no unit of its owner stands (unmanned works fall in)

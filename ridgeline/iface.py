@@ -82,6 +82,11 @@ class Session:
                      "over long water, supply and sight pass over them, and fire across a sea link is x%.1f (a landing). Desert and "
                      "tundra (d, t after the terrain letter) are harsh: +%d move-hours, almost no yield, no manpower, supplies arrive at half speed."
                      % (D.AMPHIB, D.HARSH_COST))
+            L.append("GREAT RIVERS run where they really do (Rhine, Danube, Dnieper, Volga, Nile, Yangtze, Yalu, Mississippi, Amazon and some fifty more). A border a river runs through is a "
+                     "RIVER BORDER (marked = in a province's neighbour list; api.provs[id]['river'] lists the neighbours on the far bank). A unit on its way across moves at x%.2f speed until it is over, "
+                     "and an advancing unit fires at x%.2f at targets on the far bank; units holding their own bank fire normally, and a unit falling back across a river is as slow as one attacking across it. "
+                     "A river is no obstacle while both banks are frozen (winter in the cold latitudes), and your own units cross at normal speed where both banks are yours and both have infrastructure %d or more (bridges)."
+                     % (D.RIVER_MOVE, D.RIVER_ATK, D.RIVER_BRIDGE))
         L.append("TIME 1 tick = 1 hour, 24 = 1 day. The game runs in real time and does not wait for you.")
         L.append("MAP is a graph of provinces. Owning a province that connects to one of your depots through your own provinces "
                  "(a supply line) pays its yield every day. Cut-off provinces pay nothing.")
@@ -146,7 +151,7 @@ class Session:
                  "on the manpower pool; with no manpower units do not recover.")
         L.append("FORTS: units told to `fortify` dig in where they stand (own province). Levels 1 trench, 2 bunkers, 3 fortress: "
                  "each level divides damage taken there by a further +25%% and adds 10%% return fire. Level L takes L x %d unit-hours "
-                 "(eng digs 4x faster). art ignores 60%% of a fort, eng 40%%, arm 25%%. A captured fort loses half its levels." % D.FORT_HOURS)
+                 "(eng digs 4x faster). art ignores 60%% of a fort, eng 40%%, arm 25%%. A captured fort loses half its levels. Works need men: in a province where none of your units stands, the fort loses %.2f of a level a day. MARCHING: a unit loses %.1f readiness an hour on the move, but only %.2f an hour while it marches through your own supplied land out of contact, and %s where that province has infrastructure 1 or more (rail)." % (D.FORT_HOURS, D.FORT_DECAY, -D.RDY_MOVE, -D.RDY_MARCH, "none" if D.RDY_RAIL == 0 else "%.2f" % -D.RDY_RAIL))
         L.append("SUPPLIES: every supplied province stores supplies (cap %d, city %d). Inflow per hour is %.0f/(1+%.2f x provinces "
                  "from the nearest depot of yours, times that depot's output), so fronts far from any depot fill slowly. A unit burns %.2f/h idle, %.2f in contact, %.2f defending an "
                  "assault and %.2f assaulting, from the province it stands in (or an adjacent own province when on foreign soil). "
@@ -301,7 +306,7 @@ class Session:
         pr = self.g.provs[i]
         return "%d %s%s%d %d/%d%s%s:%s" % (pr.id, pr.terrain[0], pr.biome[:1], pr.elev, pr.y, pr.mp, "c" if pr.city else "",
                                          "".join(" %s%d" % (D.DEP_CODE[k], getattr(pr, k)) for k in D.STRAT if getattr(pr, k)),
-                                         ",".join(("~%d" % b if b in pr.sea else str(b)) for b in pr.nbrs))
+                                         ",".join(("~%d" % b if b in pr.sea else "=%d" % b if b in pr.river else str(b)) for b in pr.nbrs))
 
     def _near_cap(self):
         kc = self.p.known_caps
@@ -1013,7 +1018,7 @@ class PolicyApi:
     api.refit_cost        {type: dict(res, steel, oil, rare)}  price of `refit` per unit of that type; api.old_units = number of your units not on the current model
     api.income            net income per day        api.capital  your capital province id
     api.provs             {id: dict(terrain, elev (0-3), y, mp, fort (last seen), stock, flow (supplies/h), city, nbrs, owner 'me'|'enemy'|'neutral' (last known),
-                          who (owner's player id or -1), visible, supplied, steel, oil, rare (deposit yield per day, 0 if none), harsh (desert/tundra), sea (neighbours across water), x, y0 (key point, map cells))}   ONLY provinces you have explored (seen at least once); use .get() for anything else
+                          who (owner's player id or -1), visible, supplied, steel, oil, rare (deposit yield per day, 0 if none), harsh (desert/tundra), sea (neighbours across water), river (neighbours on the far bank of a great river), x, y0 (key point, map cells))}   ONLY provinces you have explored (seen at least once); use .get() for anything else
     api.me, api.players   your player id, number of factions (all others are enemies)
     api.units             [dict(id, type, prov, str, rdy, plan (target or -1), bonus, dry, path, fighting, supplied, group, front (under the front
                           or the expand standing order), expand, explore, xp (experience 0-100), mor (morale 0-100), sup (suppression 0-100), mark (model number), old (True: outdated model, see api.marks),
@@ -1055,7 +1060,7 @@ class PolicyApi:
                                   fort=p.known_fort.get(pr.id, 0), stock=g.stock[pr.id] if g.owner[pr.id] == pid else 0,
                                   flow=g.stock_flow(pid, pr.id),
                                   owner="me" if ko.get(pr.id, -1) == pid else "neutral" if ko.get(pr.id, -1) < 0 else "enemy",
-                                  who=ko.get(pr.id, -1), visible=pr.id in p.visible, harsh=bool(pr.biome), sea=pr.sea, x=pr.cx, y0=pr.cy, steel=pr.steel, oil=pr.oil, rare=pr.rare, coal=pr.coal, rubber=pr.rubber, lat=pr.lat, cold=pr.id in g.cold, freezes=g.freezes(pr.id, 3), jungle=pr.id in g.jungle,
+                                  who=ko.get(pr.id, -1), visible=pr.id in p.visible, harsh=bool(pr.biome), sea=pr.sea, river=sorted(pr.river), x=pr.cx, y0=pr.cy, steel=pr.steel, oil=pr.oil, rare=pr.rare, coal=pr.coal, rubber=pr.rubber, lat=pr.lat, cold=pr.id in g.cold, freezes=g.freezes(pr.id, 3), jungle=pr.id in g.jungle,
                                   dev=g.dev[pr.id] if g.owner[pr.id] == pid else kd.get(pr.id, (0.0, 0.0))[0], infra=g.infra[pr.id] if g.owner[pr.id] == pid else kd.get(pr.id, (0.0, 0.0))[1],
                                   agg=g.agg[pr.id] if g.owner[pr.id] == pid else None, yield_now=g.prod[pr.id] if g.owner[pr.id] == pid else None, room=g.room(pr.id) if g.owner[pr.id] == pid else None,
                                   supplied=pr.id in p.supplied) for pr in (g.provs[i] for i in sorted(rel)) if pr.terrain != "water"}
