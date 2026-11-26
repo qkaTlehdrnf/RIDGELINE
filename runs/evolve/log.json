@@ -1,0 +1,90 @@
+{
+ "seeds": [
+  30,
+  31,
+  32
+ ],
+ "model": "claude-sonnet-5-5",
+ "gens": [
+  {
+   "gen": 1,
+   "champion": "policies/learned.py",
+   "vs": "basic.py",
+   "margin_before": -123,
+   "review": "**Review:** The same policy wins as P1 (3/3) but loses as P0 (0/3). P0's Aurum Compact is slower, so we lose the tempo war, and seed 31 collapsed to 13 provinces. Our assaults succeed only 28/130. They average 1.2 directions and readiness 36, and most have no plan bonus. Attacks with a plan bonus of 45% or more succeed 11/27 at a loss of 57 per assault. Attacks with 25% or less succeed 16/97. Attacks at a strength ratio under 1.5 almost always fail. We are bleeding strength into piecemeal, tired attacks, while the enemy wins its own assaults mostly at ratios of 2 or more.\n\n**Changes:**\n- Only rested units (readiness 55 or more, strength 70 or more) may start an attack.\n- Attacks are almost always prepared first. They launch at a bonus of 45% or more, or at very high predicted odds.\n- At most 4 prepared attacks run at once, so strength concentrates instead of spreading thin.\n- Stale preparations stand down after 120 h.\n- Unit mix: no more militia, with more infantry, artillery and engineers.\n- Everything else stays under the `front` order, which digs in and rotates worn units.",
+   "margin_vs_champion": -247,
+   "wins_vs_champion": "2/6",
+   "assaults": "28/130 -> 4/34",
+   "result": "kept champion",
+   "secs": 124,
+   "cost_so_far": 0.087
+  },
+  {
+   "gen": 2,
+   "champion": "policies/learned.py",
+   "vs": "basic.py",
+   "margin_before": -123,
+   "review": "**Review:** We won 3 of 6 games, all as P1; as P0 we lost every seed. Our assaults succeed only 28 of 130 times, and the enemy takes 68 of its 175 assaults on us.\n\n- Most of our attacks go in unprepared: 81 of the 130 had under 1% plan bonus and won 8.\n- Attacks with 45% or more plan bonus won 11 of 27 and lost very little strength.\n- Attackers' readiness averaged 36, and 17 of the 63 attacks below readiness 25 succeeded.\n- Almost every attack came from one direction, and the model flags forts and multiple directions as important.\n- Fort level 3 attacks lost 501 strength each.\n- Attacks backed by under 30 supplies lost 441 per assault.\n\n**Changes:**\n- Attack only with rested units (readiness 60+, strength 70+).\n- Always prepare first, and launch at 45%+ bonus or when the model is confident at the current bonus.\n- Raise the attack thresholds, and skip fort 3 targets unless artillery or engineers are in the stack.\n- Cancel a prepared attack if the model's odds fall.\n- Cut mil and rec from recruiting in favour of inf, art, eng and mtn.\n- Units idle on the front dig in and rest, which cuts losses to the enemy's assaults.",
+   "margin_vs_champion": -103,
+   "wins_vs_champion": "3/6",
+   "assaults": "28/130 -> 6/24",
+   "result": "kept champion",
+   "secs": 123,
+   "cost_so_far": 0.126
+  },
+  {
+   "gen": 3,
+   "champion": "policies/learned.py",
+   "vs": "basic.py",
+   "margin_before": -123,
+   "review": "**Review:** We won only 3 of 6 games, all as P1. As P0 we lost every seed, and in seed 31 we were overrun (13 provinces vs 185).\n\n- **Assaults:** 28 of 130 succeeded. Most were weak attacks: 63 had readiness under 25, 114 came from a single direction, and 81 had no plan bonus.\n- **What worked:** attacks with plan bonus of 45% or more won 11 of 27 at very low loss (57 per assault), and high readiness cut losses. The current policy launches too many unprepared, low-readiness attacks. That bleeds units, which then lose to the enemy's larger stacks.\n- **Defence:** enemy assaults won 68 of 175, mostly at ratios of 2 or more against our thin line.\n\n**Changes:**\n- Attack only with rested units (strength 70+, readiness 50+), and always prepare first.\n- Launch only at a plan bonus of 45%+ and a model chance of 0.6+, or at 0.85+ with any bonus.\n- Drop the plan after 120 hours if the model still says no.\n- Raise the attack thresholds (GO 0.85, PLAN 0.6) and keep two units back in each province.\n- Recruit more art, eng, mtn and inf, and fewer mil and rec.\n- Units under 55 strength return to the front order, which has them dig in and rotate to rest.",
+   "margin_vs_champion": -584,
+   "wins_vs_champion": "1/6",
+   "assaults": "28/130 -> 2/40",
+   "result": "kept champion",
+   "secs": 124,
+   "cost_so_far": 0.164
+  },
+  {
+   "gen": 4,
+   "champion": "policies/learned.py",
+   "vs": "basic.py",
+   "margin_before": -123,
+   "review": "**Review:** We won 3 of 6 games, all as P1. As P0 we lost every seed, and in seed 31 we were overrun. All three earlier rewrites tightened attack gating, and all three scored worse. Our assaults are not the main problem, so I'm leaving the attack logic as it is.\n\nThe evidence points to expansion and economy instead:\n- By day 5 we already trail in provinces, as P0 (54 vs 63 in seed 30, 49 vs 58 in seed 32).\n- Our province count then flatlines at about 80 while the enemy reaches 120.\n- The enemy wins its assaults mainly at ratios of 2 or more against thin stacks.\n\nTerritory pays income and manpower, so the early land grab decides the game. Our grab only runs every 12 hours and only when 2 or more units share a province, which is too slow for the slower Aurum.\n\n**Changes:**\n- Neutral grabbing now runs every tick.\n- A single idle unit may take neutral land, and an interior province may be left empty.\n- Fast units (rec, mot, arm) are preferred for the grab.\n- Recruiting favours inf, eng, art and mtn, with less militia and recon, so stacks defend better.\n- Attack logic is unchanged.",
+   "margin_vs_champion": 624,
+   "wins_vs_champion": "4/6",
+   "assaults": "28/130 -> 153/215",
+   "result": "accepted",
+   "secs": 119,
+   "cost_so_far": 0.258
+  },
+  {
+   "gen": 5,
+   "champion": "runs/evolve/gen4/policy.py",
+   "vs": "learned.py",
+   "margin_before": 624,
+   "review": "**Review:** We won 4 of 6 games, and every loss or stall traces to one thing. In seed 30 as P1 the policy was removed after about 1,689 h (crash or time budget), after which 2 units faced 424 and we lost the game. A crash costs far more than any tactical tweak. The likely causes are unguarded `P[...]` lookups (plan targets, neighbours missing from the map) and the quadratic `p_win` shrink loop once we field 400+ units.\n\nAssault data also shows:\n- Single-direction attacks with low readiness (avg 22) mostly succeed, but they are costly.\n- Heavy-weighted stacks (50%+ art/arm/eng) lose less.\n- Multi-direction attacks have fewer samples and no clear benefit.\n\n**Changes:**\n- Wrap the whole tick in try/except, so any error drops one tick and not the policy.\n- Use safe `.get` lookups for provinces and plan targets.\n- Cap the work per call: at most 30 scored targets, at most 10 iterations of the shrink loop, and at most 40 units per assault selection.\n- Fall back to a plain `front` order for loose units if the main logic fails.\n- Keep the recruit mix, neutral grabbing, and prepare/launch logic, since they won 4 games.",
+   "margin_vs_champion": -13,
+   "wins_vs_champion": "3/6",
+   "assaults": "153/215 -> 26/103",
+   "result": "kept champion",
+   "secs": 134,
+   "cost_so_far": 0.347
+  },
+  {
+   "gen": 6,
+   "champion": "runs/evolve/gen4/policy.py",
+   "vs": "learned.py",
+   "margin_before": 664,
+   "review": "**Review:** We won 4 of 6 games. Both seed 30 games went badly. As P1 the policy was removed at about 2,041 h (crash or time budget), after which 4 units faced 459 and we lost 106 provinces. As P0 the game stalled at 99 vs 109 provinces. The earlier attempt to add a try/except also changed the attack logic, and the margin fell to -13. Assault data supports the existing logic:\n- Strong ratios (3 or more) succeed about 90% of the time.\n- Heavy stacks (art/arm/eng at 50% or more) lose little.\n\n**Changes:** I keep the attack logic and thresholds identical, and only harden the policy.\n- Recruiting, neutral grabs and attacks now run as three independent stages. Each has its own try/except, so an error in one cannot remove the policy or skip recruiting.\n- Plan and neighbour lookups use `.get`, so unseen or missing provinces are skipped.\n- Per-call work is bounded: at most 24 candidate attackers per target and at most 40 scored targets, which keeps the time budget safe with 400+ units.\n- `p_win` now falls back to the heuristic if a model value is bad.",
+   "margin_vs_champion": -26,
+   "wins_vs_champion": "3/6",
+   "assaults": "153/213 -> 23/105",
+   "result": "kept champion",
+   "secs": 138,
+   "cost_so_far": 0.437
+  }
+ ],
+ "cost": 0.4374182,
+ "champion": "runs/evolve/gen4/policy.py"
+}

@@ -1,0 +1,184 @@
+**Reasoning**
+
+Last war we finished 16th with 93 provinces. Our assaults succeeded 2 times in 315, so the stalemate came from a lack of offence, not from weak defence. Enemies took 0 of 244 assaults on us, which shows the defence works. The record also shows unused stock: 4,946 oil and 2,722 steel sat idle while res stayed near zero, so we were starved of general res but not of the specialised resources.
+
+Changes:
+- **Recruiting** uses surplus oil and steel for motorised and armoured units, and adds engineers for fort digging once the army is large. Res is kept above a reserve.
+- **Attacks** need a 3x strength margin over exact enemy counts (1.5x estimate when unseen, and no attack blind), readiness of at least 50, and a prepared bonus of 30% before moving. Only one launch per tick.
+- **Research** spreads across lines with at least 150 res spare. It keeps the two-project cap and skips unseen prefixes.
+- **Land** still goes to expansion early, with scouts exploring and heavy units joining the front.
+
+I have not tested this against the engine, so the thresholds are estimates.
+
+```python
+INF = ("inf", "mil", "mtn", "mot", "cav")
+ARMOURED = ("arm", "hvt", "mec")
+LINES = [
+    "conscription", "inf.protection", "discipline", "inf.weapons", "fieldworks",
+    "art.weapons", "logistics", "mining", "medicine", "industry", "drill",
+    "arm.protection", "arm.weapons", "atg.weapons", "mtn.protection",
+    "mot.mobility", "staffwork", "farming",
+]
+
+
+def _ids(lst):
+    return ",".join(str(u["id"]) for u in lst)
+
+
+def _bon(u):
+    b = u.get("bonus", 0) or 0
+    return b * 100 if b <= 1 else b
+
+
+def _ok(api, t, n=1):
+    c = api.costs.get(t, (0, 0))
+    uc = api.unit_costs.get(t, {}) or {}
+    if api.res < c[0] * n + 60 or api.mp < c[1] * n:
+        return False
+    st = api.stock
+    for k in ("steel", "oil", "rare"):
+        if st.get(k, 0) < uc.get(k, 0) * n:
+            return False
+    return True
+
+
+def _pick(api, counts, total, armour):
+    oil = api.stock.get("oil", 0)
+    prio = []
+    if counts.get("rec", 0) < 2 and total >= 4:
+        prio.append("rec")
+    if counts.get("art", 0) < 0.14 * total:
+        prio.append("art")
+    if armour and counts.get("atg", 0) < 0.10 * total:
+        prio.append("atg")
+    if total >= 30 and counts.get("arm", 0) < 0.12 * total and oil >= 200:
+        prio.append("arm")
+    if total >= 30 and counts.get("mot", 0) < 0.12 * total and oil >= 150:
+        prio.append("mot")
+    if total >= 60 and counts.get("eng", 0) < 0.04 * total:
+        prio.append("eng")
+    prio.append("inf")
+    for t in prio:
+        if _ok(api, t):
+            return t
+    return None
+
+
+def tick(api):
+    m = api.mem
+    me = api.me
+    units = api.units or []
+
+    counts = {}
+    for u in units:
+        counts[u["type"]] = counts.get(u["type"], 0) + 1
+    total = len(units)
+
+    armour = False
+    for v in (api.enemy or {}).values():
+        ty = str(v.get("types", ""))
+        if any(a in ty for a in ARMOURED):
+            armour = True
+
+    # 1. Recruit (up to 3 per tick, only while income is positive or the army is small)
+    try:
+        if api.income > 0 or total < 20:
+            for _ in range(3):
+                pick = _pick(api, counts, total, armour)
+                if not pick:
+                    break
+                r = api.cmd("recruit %s P%d" % (pick, api.capital))
+                if not str(r).startswith("ok"):
+                    break
+                counts[pick] = counts.get(pick, 0) + 1
+                total += 1
+    except Exception:
+        pass
+
+    # 2. Assign idle units
+    try:
+        idle = [u for u in units
+                if u.get("state") == "ready" and not u.get("path")
+                and not (u.get("front") or u.get("expand") or u.get("explore"))]
+        scouts = [u for u in idle if u["type"] == "rec"]
+        inf = [u for u in idle if u["type"] in INF]
+        heavy = [u for u in idle if u["type"] not in INF and u["type"] != "rec"]
+        if scouts:
+            api.cmd("explore " + _ids(scouts))
+        if inf:
+            api.cmd("expand " + _ids(inf))   # joins the front when no neutral land is reachable
+        if heavy:
+            api.cmd("front " + _ids(heavy))
+    except Exception:
+        pass
+
+    # 3. Attacks: only against exactly known or heavily discounted enemies, large margin, prepared
+    try:
+        if api.stock.get("res", 0) >= 80:
+            by_prov = {}
+            for u in units:
+                if (u.get("state") in ("ready", "preparing") and u.get("str", 0) >= 50
+                        and u.get("rdy", 0) >= 50 and not u.get("path")
+                        and not u.get("expand") and not u.get("explore")
+                        and u["type"] != "rec"):
+                    by_prov.setdefault(u["prov"], []).append(u)
+            done = False
+            for p, lst in by_prov.items():
+                if done:
+                    break
+                pr = api.provs.get(p)
+                if not pr:
+                    continue
+                for n in pr.get("nbrs", []):
+                    nd = api.provs.get(n)
+                    if not nd or nd.get("who", -1) in (-1, me):
+                        continue
+                    e = (api.enemy or {}).get(n)
+                    if e is None:
+                        continue  # never attack blind
+                    es = e.get("str", 0) * (1.0 if e.get("exact") else 1.5)
+                    ours = sum(u.get("str", 0) for u in lst)
+                    if ours < 3.0 * es + 80:
+                        continue
+                    planned = [u for u in lst if u.get("plan") == n]
+                    if planned:
+                        avg = sum(_bon(u) for u in planned) / len(planned)
+                        if avg >= 30:
+                            api.cmd("move %s P%d" % (_ids(planned), n))
+                            done = True
+                            break
+                        continue
+                    free = [u for u in lst if u.get("plan", -1) in (-1, None)]
+                    if free:
+                        api.cmd("prepare %s P%d" % (_ids(free), n))
+                        done = True
+                        break
+    except Exception:
+        pass
+
+    # 4. Research (blind; keep two projects running, keep a reserve for replacements)
+    try:
+        active = set(r[0] for r in (api.research or []))
+        if len(active) < 2 and api.res > 220:
+            for line in LINES:
+                if len(active) >= 2:
+                    break
+                if line in active:
+                    continue
+                if "." in line and line.split(".")[0] not in counts:
+                    continue
+                info = (api.tech or {}).get(line)
+                if not info or info.get("status") != "open":
+                    continue
+                c = info.get("cost") or {}
+                if api.res < c.get("res", 0) + 150:
+                    continue
+                if any(api.stock.get(k, 0) < c.get(k, 0) for k in ("steel", "oil", "rare")):
+                    continue
+                api.cmd("research %s" % line)
+                active.add(line)
+    except Exception:
+        pass
+
+    m["calls"] = m.get("calls", 0) + 1
+```

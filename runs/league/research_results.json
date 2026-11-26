@@ -1,0 +1,644 @@
+{
+ "gen0_seed50": {
+  "result": {
+   "seed": 50,
+   "winner": 2,
+   "ticks": 3000,
+   "provinces": [
+    250,
+    182,
+    496
+   ],
+   "alive": [
+    true,
+    true,
+    true
+   ],
+   "units": [
+    947,
+    1495,
+    1754
+   ],
+   "kills": [
+    111,
+    29,
+    87
+   ],
+   "start": {
+    "provs": [
+     65,
+     61,
+     83
+    ],
+    "units": [
+     124,
+     112,
+     116
+    ]
+   },
+   "policy_errors": [
+    null,
+    null,
+    "NameError: name 'Exception' is not defined"
+   ]
+  },
+  "tech": [
+   [
+    "farming level 1: BREAKTHROUGH, res yield +9%",
+    "conscription level 1: BREAKTHROUGH, manpower yield +16%",
+    "farming level 2: BREAKTHROUGH, res yield +9%",
+    "conscription level 2: BREAKTHROUGH, manpower yield +10%",
+    "farming level 3: BREAKTHROUGH, res yield +6%",
+    "conscription level 3: BREAKTHROUGH, manpower yield +12%",
+    "industry level 1: DEAD END, nothing gained, the line is closed",
+    "logistics level 1: BREAKTHROUGH, supply inflow +24%",
+    "medicine level 1: BREAKTHROUGH, strength recovery +40%",
+    "logistics level 2: DEAD END, nothing gained, the line is closed",
+    "medicine level 2: BREAKTHROUGH, strength recovery +19%",
+    "inf.protection level 1: DEAD END, nothing gained, the line is closed",
+    "art.weapons level 1: BREAKTHROUGH, art atk +10%",
+    "medicine level 3: DEAD END, nothing gained, the line is closed",
+    "art.weapons level 2: BREAKTHROUGH, art atk +10%",
+    "inf.weapons level 1: DEAD END, nothing gained, the line is closed",
+    "discipline level 1: DEAD END, nothing gained, the line is closed",
+    "art.weapons level 3: BREAKTHROUGH, art atk +9%",
+    "fieldworks level 1: BREAKTHROUGH, fort building +29%",
+    "mining level 1: DEAD END, nothing gained, the line is closed",
+    "fieldworks level 2: DEAD END, nothing gained, the line is closed",
+    "drill level 1: BREAKTHROUGH, new units start with +9 experience",
+    "staffwork level 1: BREAKTHROUGH, prepared-attack build-up +35%",
+    "drill level 2: BREAKTHROUGH, new units start with +8 experience",
+    "staffwork level 2: DEAD END, nothing gained, the line is closed",
+    "atg.weapons level 1: BREAKTHROUGH, atg atk +6%",
+    "drill level 3: BREAKTHROUGH, new units start with +13 experience",
+    "atg.weapons level 2: BREAKTHROUGH, atg atk +10%",
+    "art.protection level 1: BREAKTHROUGH, art dfn +8%",
+    "art.protection level 2: DEAD END, nothing gained, the line is closed",
+    "atg.weapons level 3: BREAKTHROUGH, atg atk +14%",
+    "drilling level 1: BREAKTHROUGH, oil yield +12%",
+    "refining level 1: BREAKTHROUGH, rare yield +7%",
+    "drilling level 2: DEAD END, nothing gained, the line is closed",
+    "refining level 2: BREAKTHROUGH, rare yield +8%",
+    "inf.mobility level 1: BREAKTHROUGH, inf spd +16%"
+   ],
+   [
+    "farming level 1: BREAKTHROUGH, res yield +10%",
+    "conscription level 1: DEAD END, nothing gained, the line is closed",
+    "industry level 1: BREAKTHROUGH, unit res cost -14%",
+    "farming level 2: DEAD END, nothing gained, the line is closed",
+    "industry level 2: BREAKTHROUGH, unit res cost -9%",
+    "logistics level 1: DEAD END, nothing gained, the line is closed",
+    "mining level 1: BREAKTHROUGH, steel yield +8%",
+    "industry level 3: BREAKTHROUGH, unit res cost -10%",
+    "mining level 2: DEAD END, nothing gained, the line is closed",
+    "inf.weapons level 1: DEAD END, nothing gained, the line is closed",
+    "grn.weapons level 1: BREAKTHROUGH, grn atk +14%",
+    "art.weapons level 1: BREAKTHROUGH, art atk +8%",
+    "grn.weapons level 2: BREAKTHROUGH, grn atk +13%",
+    "art.weapons level 2: BREAKTHROUGH, art atk +7%",
+    "grn.weapons level 3: DEAD END, nothing gained, the line is closed",
+    "art.weapons level 3: BREAKTHROUGH, art atk +9%",
+    "medicine level 1: BREAKTHROUGH, strength recovery +35%",
+    "discipline level 1: BREAKTHROUGH, new units +14 morale, morale recovery +28%",
+    "medicine level 2: BREAKTHROUGH, strength recovery +46%",
+    "discipline level 2: DEAD END, nothing gained, the line is closed",
+    "drilling level 1: BREAKTHROUGH, oil yield +12%",
+    "medicine level 3: DEAD END, nothing gained, the line is closed",
+    "drilling level 2: BREAKTHROUGH, oil yield +10%",
+    "inf.protection level 1: BREAKTHROUGH, inf dfn +9%",
+    "inf.protection level 2: DEAD END, nothing gained, the line is closed",
+    "drilling level 3: DEAD END, nothing gained, the line is closed",
+    "drill level 1: DEAD END, nothing gained, the line is closed",
+    "fieldworks level 1: BREAKTHROUGH, fort building +20%",
+    "staffwork level 1: BREAKTHROUGH, prepared-attack build-up +28%",
+    "fieldworks level 2: BREAKTHROUGH, fort building +39%",
+    "staffwork level 2: BREAKTHROUGH, prepared-attack build-up +40%",
+    "fieldworks level 3: BREAKTHROUGH, fort building +42%",
+    "staffwork level 3: BREAKTHROUGH, prepared-attack build-up +20%",
+    "refining level 1: BREAKTHROUGH, rare yield +9%",
+    "cav.mobility level 1: BREAKTHROUGH, cav spd +7%"
+   ],
+   [
+    "farming level 1: BREAKTHROUGH, res yield +10%",
+    "conscription level 1: BREAKTHROUGH, manpower yield +11%",
+    "farming level 2: BREAKTHROUGH, res yield +10%",
+    "conscription level 2: BREAKTHROUGH, manpower yield +9%",
+    "farming level 3: BREAKTHROUGH, res yield +13%",
+    "conscription level 3: DEAD END, nothing gained, the line is closed",
+    "mining level 1: BREAKTHROUGH, steel yield +13%",
+    "inf.weapons level 1: BREAKTHROUGH, inf atk +8%",
+    "mining level 2: BREAKTHROUGH, steel yield +7%",
+    "inf.weapons level 2: DEAD END, nothing gained, the line is closed",
+    "art.weapons level 1: BREAKTHROUGH, art atk +6%",
+    "mining level 3: BREAKTHROUGH, steel yield +14%",
+    "art.weapons level 2: BREAKTHROUGH, art atk +10%",
+    "logistics level 1: DEAD END, nothing gained, the line is closed",
+    "medicine level 1: BREAKTHROUGH, strength recovery +39%",
+    "art.weapons level 3: DEAD END, nothing gained, the line is closed",
+    "medicine level 2: DEAD END, nothing gained, the line is closed",
+    "grn.weapons level 1: BREAKTHROUGH, grn atk +8%",
+    "discipline level 1: BREAKTHROUGH, new units +7 morale, morale recovery +14%",
+    "grn.weapons level 2: DEAD END, nothing gained, the line is closed",
+    "discipline level 2: DEAD END, nothing gained, the line is closed",
+    "inf.protection level 1: BREAKTHROUGH, inf dfn +11%",
+    "staffwork level 1: BREAKTHROUGH, prepared-attack build-up +47%",
+    "inf.protection level 2: DEAD END, nothing gained, the line is closed",
+    "staffwork level 2: BREAKTHROUGH, prepared-attack build-up +47%",
+    "industry level 1: DEAD END, nothing gained, the line is closed",
+    "drill level 1: BREAKTHROUGH, new units start with +10 experience",
+    "staffwork level 3: DEAD END, nothing gained, the line is closed",
+    "drill level 2: BREAKTHROUGH, new units start with +9 experience",
+    "art.protection level 1: DEAD END, nothing gained, the line is closed",
+    "fieldworks level 1: BREAKTHROUGH, fort building +31%",
+    "drill level 3: DEAD END, nothing gained, the line is closed",
+    "fieldworks level 2: BREAKTHROUGH, fort building +29%",
+    "drilling level 1: BREAKTHROUGH, oil yield +14%",
+    "drilling level 2: BREAKTHROUGH, oil yield +8%"
+   ]
+  ],
+  "bank": [
+   {
+    "res": 68315,
+    "steel": 7767,
+    "oil": 4361,
+    "rare": 2704
+   },
+   {
+    "res": 47415,
+    "steel": 6204,
+    "oil": 5236,
+    "rare": 408
+   },
+   {
+    "res": 109391,
+    "steel": 19720,
+    "oil": 7423,
+    "rare": 4284
+   }
+  ],
+  "kinds": [
+   {
+    "inf": 447,
+    "mil": 11,
+    "arm": 6,
+    "mtn": 77,
+    "eng": 69,
+    "art": 152,
+    "mot": 5,
+    "atg": 91,
+    "grn": 87,
+    "rec": 2
+   },
+   {
+    "inf": 953,
+    "mil": 243,
+    "arm": 6,
+    "mtn": 12,
+    "art": 16,
+    "eng": 5,
+    "mot": 10,
+    "atg": 237,
+    "grn": 13
+   },
+   {
+    "inf": 998,
+    "mtn": 9,
+    "art": 347,
+    "mot": 7,
+    "mil": 17,
+    "arm": 9,
+    "eng": 8,
+    "grn": 352,
+    "atg": 7
+   }
+  ]
+ },
+ "gen0_seed51": {
+  "result": {
+   "seed": 51,
+   "winner": 1,
+   "ticks": 3000,
+   "provinces": [
+    289,
+    615,
+    96
+   ],
+   "alive": [
+    true,
+    true,
+    true
+   ],
+   "units": [
+    1056,
+    1469,
+    1659
+   ],
+   "kills": [
+    9,
+    16,
+    107
+   ],
+   "start": {
+    "provs": [
+     97,
+     67,
+     55
+    ],
+    "units": [
+     152,
+     102,
+     92
+    ]
+   },
+   "policy_errors": [
+    null,
+    null,
+    "NameError: name 'Exception' is not defined"
+   ]
+  },
+  "tech": [
+   [
+    "farming level 1: DEAD END, nothing gained, the line is closed",
+    "conscription level 1: BREAKTHROUGH, manpower yield +8%",
+    "industry level 1: BREAKTHROUGH, unit res cost -6%",
+    "conscription level 2: DEAD END, nothing gained, the line is closed",
+    "industry level 2: DEAD END, nothing gained, the line is closed",
+    "logistics level 1: BREAKTHROUGH, supply inflow +12%",
+    "medicine level 1: BREAKTHROUGH, strength recovery +38%",
+    "logistics level 2: BREAKTHROUGH, supply inflow +26%",
+    "medicine level 2: BREAKTHROUGH, strength recovery +21%",
+    "logistics level 3: DEAD END, nothing gained, the line is closed",
+    "medicine level 3: DEAD END, nothing gained, the line is closed",
+    "inf.protection level 1: BREAKTHROUGH, inf dfn +12%",
+    "art.weapons level 1: BREAKTHROUGH, art atk +16%",
+    "inf.protection level 2: BREAKTHROUGH, inf dfn +13%",
+    "art.weapons level 2: DEAD END, nothing gained, the line is closed",
+    "inf.weapons level 1: BREAKTHROUGH, inf atk +12%",
+    "inf.protection level 3: BREAKTHROUGH, inf dfn +14%",
+    "inf.weapons level 2: BREAKTHROUGH, inf atk +13%",
+    "discipline level 1: BREAKTHROUGH, new units +16 morale, morale recovery +32%",
+    "discipline level 2: BREAKTHROUGH, new units +9 morale, morale recovery +18%",
+    "inf.weapons level 3: BREAKTHROUGH, inf atk +13%",
+    "fieldworks level 1: BREAKTHROUGH, fort building +19%",
+    "discipline level 3: DEAD END, nothing gained, the line is closed",
+    "fieldworks level 2: DEAD END, nothing gained, the line is closed",
+    "mining level 1: BREAKTHROUGH, steel yield +11%",
+    "drill level 1: BREAKTHROUGH, new units start with +13 experience",
+    "mining level 2: BREAKTHROUGH, steel yield +13%",
+    "drill level 2: DEAD END, nothing gained, the line is closed",
+    "staffwork level 1: BREAKTHROUGH, prepared-attack build-up +35%",
+    "mining level 3: BREAKTHROUGH, steel yield +12%",
+    "staffwork level 2: DEAD END, nothing gained, the line is closed",
+    "atg.weapons level 1: BREAKTHROUGH, atg atk +7%",
+    "art.protection level 1: BREAKTHROUGH, art dfn +10%",
+    "atg.weapons level 2: BREAKTHROUGH, atg atk +14%",
+    "art.protection level 2: DEAD END, nothing gained, the line is closed"
+   ],
+   [
+    "farming level 1: BREAKTHROUGH, res yield +9%",
+    "conscription level 1: BREAKTHROUGH, manpower yield +14%",
+    "farming level 2: BREAKTHROUGH, res yield +15%",
+    "conscription level 2: BREAKTHROUGH, manpower yield +11%",
+    "farming level 3: DEAD END, nothing gained, the line is closed",
+    "conscription level 3: DEAD END, nothing gained, the line is closed",
+    "industry level 1: DEAD END, nothing gained, the line is closed",
+    "logistics level 1: BREAKTHROUGH, supply inflow +21%",
+    "mining level 1: DEAD END, nothing gained, the line is closed",
+    "logistics level 2: BREAKTHROUGH, supply inflow +17%",
+    "inf.weapons level 1: DEAD END, nothing gained, the line is closed",
+    "grn.weapons level 1: BREAKTHROUGH, grn atk +14%",
+    "logistics level 3: DEAD END, nothing gained, the line is closed",
+    "grn.weapons level 2: DEAD END, nothing gained, the line is closed",
+    "art.weapons level 1: BREAKTHROUGH, art atk +13%",
+    "medicine level 1: DEAD END, nothing gained, the line is closed",
+    "discipline level 1: BREAKTHROUGH, new units +12 morale, morale recovery +23%",
+    "art.weapons level 2: BREAKTHROUGH, art atk +13%",
+    "discipline level 2: DEAD END, nothing gained, the line is closed",
+    "drilling level 1: BREAKTHROUGH, oil yield +10%",
+    "art.weapons level 3: DEAD END, nothing gained, the line is closed",
+    "drilling level 2: BREAKTHROUGH, oil yield +11%",
+    "inf.protection level 1: BREAKTHROUGH, inf dfn +12%",
+    "inf.protection level 2: BREAKTHROUGH, inf dfn +7%",
+    "drilling level 3: DEAD END, nothing gained, the line is closed",
+    "drill level 1: DEAD END, nothing gained, the line is closed",
+    "inf.protection level 3: DEAD END, nothing gained, the line is closed",
+    "fieldworks level 1: BREAKTHROUGH, fort building +20%",
+    "staffwork level 1: BREAKTHROUGH, prepared-attack build-up +26%",
+    "fieldworks level 2: BREAKTHROUGH, fort building +36%",
+    "staffwork level 2: DEAD END, nothing gained, the line is closed",
+    "refining level 1: BREAKTHROUGH, rare yield +13%",
+    "fieldworks level 3: DEAD END, nothing gained, the line is closed",
+    "refining level 2: BREAKTHROUGH, rare yield +11%",
+    "cav.mobility level 1: BREAKTHROUGH, cav spd +7%"
+   ],
+   [
+    "farming level 1: BREAKTHROUGH, res yield +9%",
+    "conscription level 1: BREAKTHROUGH, manpower yield +8%",
+    "farming level 2: DEAD END, nothing gained, the line is closed",
+    "conscription level 2: BREAKTHROUGH, manpower yield +11%",
+    "mining level 1: BREAKTHROUGH, steel yield +16%",
+    "conscription level 3: BREAKTHROUGH, manpower yield +10%",
+    "mining level 2: DEAD END, nothing gained, the line is closed",
+    "inf.weapons level 1: BREAKTHROUGH, inf atk +10%",
+    "art.weapons level 1: BREAKTHROUGH, art atk +7%",
+    "inf.weapons level 2: BREAKTHROUGH, inf atk +14%",
+    "art.weapons level 2: BREAKTHROUGH, art atk +9%",
+    "logistics level 1: BREAKTHROUGH, supply inflow +29%",
+    "medicine level 1: BREAKTHROUGH, strength recovery +26%",
+    "logistics level 2: BREAKTHROUGH, supply inflow +18%",
+    "inf.weapons level 3: BREAKTHROUGH, inf atk +7%",
+    "art.weapons level 3: BREAKTHROUGH, art atk +15%",
+    "logistics level 3: DEAD END, nothing gained, the line is closed",
+    "medicine level 2: BREAKTHROUGH, strength recovery +27%",
+    "grn.weapons level 1: BREAKTHROUGH, grn atk +12%",
+    "grn.weapons level 2: BREAKTHROUGH, grn atk +14%",
+    "medicine level 3: BREAKTHROUGH, strength recovery +47%",
+    "discipline level 1: BREAKTHROUGH, new units +8 morale, morale recovery +16%",
+    "grn.weapons level 3: BREAKTHROUGH, grn atk +15%",
+    "discipline level 2: BREAKTHROUGH, new units +9 morale, morale recovery +19%",
+    "inf.protection level 1: BREAKTHROUGH, inf dfn +13%",
+    "inf.protection level 2: DEAD END, nothing gained, the line is closed",
+    "discipline level 3: DEAD END, nothing gained, the line is closed",
+    "staffwork level 1: DEAD END, nothing gained, the line is closed",
+    "industry level 1: BREAKTHROUGH, unit res cost -14%",
+    "drill level 1: BREAKTHROUGH, new units start with +10 experience",
+    "industry level 2: BREAKTHROUGH, unit res cost -8%",
+    "drill level 2: DEAD END, nothing gained, the line is closed",
+    "art.protection level 1: BREAKTHROUGH, art dfn +11%"
+   ]
+  ],
+  "bank": [
+   {
+    "res": 62697,
+    "steel": 9451,
+    "oil": 6227,
+    "rare": 2788
+   },
+   {
+    "res": 130528,
+    "steel": 30522,
+    "oil": 10652,
+    "rare": 4829
+   },
+   {
+    "res": 3019,
+    "steel": 461,
+    "oil": 2303,
+    "rare": 30
+   }
+  ],
+  "kinds": [
+   {
+    "inf": 499,
+    "mil": 24,
+    "art": 159,
+    "eng": 84,
+    "mtn": 79,
+    "mot": 8,
+    "arm": 8,
+    "atg": 95,
+    "grn": 96,
+    "rec": 4
+   },
+   {
+    "inf": 965,
+    "mil": 240,
+    "eng": 5,
+    "art": 18,
+    "mtn": 7,
+    "mot": 5,
+    "arm": 2,
+    "atg": 212,
+    "grn": 15
+   },
+   {
+    "inf": 941,
+    "arm": 5,
+    "art": 327,
+    "mil": 14,
+    "eng": 5,
+    "mtn": 3,
+    "mot": 3,
+    "grn": 327,
+    "atg": 34
+   }
+  ]
+ },
+ "gen1_seed50": {
+  "result": {
+   "seed": 50,
+   "winner": 2,
+   "ticks": 3000,
+   "provinces": [
+    208,
+    241,
+    478
+   ],
+   "alive": [
+    true,
+    true,
+    true
+   ],
+   "units": [
+    4196,
+    1450,
+    4901
+   ],
+   "kills": [
+    814,
+    110,
+    234
+   ],
+   "start": {
+    "provs": [
+     65,
+     61,
+     83
+    ],
+    "units": [
+     124,
+     112,
+     116
+    ]
+   },
+   "policy_errors": [
+    null,
+    null,
+    "NameError: name 'Exception' is not defined"
+   ]
+  },
+  "tech": [
+   [
+    "farming level 1: BREAKTHROUGH, res yield +9%",
+    "conscription level 1: BREAKTHROUGH, manpower yield +16%",
+    "logistics level 1: BREAKTHROUGH, supply inflow +24%",
+    "conscription level 2: BREAKTHROUGH, manpower yield +10%",
+    "farming level 2: BREAKTHROUGH, res yield +9%",
+    "logistics level 2: DEAD END, nothing gained, the line is closed",
+    "medicine level 1: BREAKTHROUGH, strength recovery +40%",
+    "industry level 1: DEAD END, nothing gained, the line is closed",
+    "medicine level 2: BREAKTHROUGH, strength recovery +19%",
+    "conscription level 3: BREAKTHROUGH, manpower yield +12%",
+    "art.weapons level 1: BREAKTHROUGH, art atk +10%",
+    "medicine level 3: DEAD END, nothing gained, the line is closed",
+    "inf.weapons level 1: DEAD END, nothing gained, the line is closed",
+    "art.weapons level 2: BREAKTHROUGH, art atk +10%",
+    "inf.protection level 1: DEAD END, nothing gained, the line is closed",
+    "staffwork level 1: BREAKTHROUGH, prepared-attack build-up +35%",
+    "art.weapons level 3: BREAKTHROUGH, art atk +9%",
+    "staffwork level 2: DEAD END, nothing gained, the line is closed",
+    "drill level 1: BREAKTHROUGH, new units start with +9 experience",
+    "discipline level 1: DEAD END, nothing gained, the line is closed",
+    "grn.weapons level 1: BREAKTHROUGH, grn atk +8%",
+    "drill level 2: BREAKTHROUGH, new units start with +8 experience",
+    "fieldworks level 1: BREAKTHROUGH, fort building +29%",
+    "grn.weapons level 2: BREAKTHROUGH, grn atk +9%",
+    "fieldworks level 2: DEAD END, nothing gained, the line is closed",
+    "mining level 1: DEAD END, nothing gained, the line is closed",
+    "grn.weapons level 3: BREAKTHROUGH, grn atk +14%",
+    "art.protection level 1: BREAKTHROUGH, art dfn +8%",
+    "eng.weapons level 1: BREAKTHROUGH, eng atk +11%",
+    "art.protection level 2: DEAD END, nothing gained, the line is closed",
+    "eng.weapons level 2: BREAKTHROUGH, eng atk +15%",
+    "grn.protection level 1: BREAKTHROUGH, grn dfn +9%",
+    "grn.protection level 2: BREAKTHROUGH, grn dfn +7%",
+    "eng.weapons level 3: DEAD END, nothing gained, the line is closed",
+    "atg.weapons level 1: BREAKTHROUGH, atg atk +6%",
+    "grn.protection level 3: DEAD END, nothing gained, the line is closed",
+    "atg.weapons level 2: BREAKTHROUGH, atg atk +10%"
+   ],
+   [
+    "farming level 1: BREAKTHROUGH, res yield +10%",
+    "conscription level 1: DEAD END, nothing gained, the line is closed",
+    "industry level 1: BREAKTHROUGH, unit res cost -14%",
+    "farming level 2: DEAD END, nothing gained, the line is closed",
+    "industry level 2: BREAKTHROUGH, unit res cost -9%",
+    "staffwork level 1: BREAKTHROUGH, prepared-attack build-up +28%",
+    "staffwork level 2: BREAKTHROUGH, prepared-attack build-up +40%",
+    "industry level 3: BREAKTHROUGH, unit res cost -10%",
+    "logistics level 1: DEAD END, nothing gained, the line is closed",
+    "staffwork level 3: BREAKTHROUGH, prepared-attack build-up +20%",
+    "art.weapons level 1: BREAKTHROUGH, art atk +8%",
+    "grn.weapons level 1: BREAKTHROUGH, grn atk +14%",
+    "art.weapons level 2: BREAKTHROUGH, art atk +7%",
+    "grn.weapons level 2: BREAKTHROUGH, grn atk +13%",
+    "art.weapons level 3: BREAKTHROUGH, art atk +9%",
+    "grn.weapons level 3: DEAD END, nothing gained, the line is closed",
+    "medicine level 1: BREAKTHROUGH, strength recovery +35%",
+    "discipline level 1: BREAKTHROUGH, new units +14 morale, morale recovery +28%",
+    "medicine level 2: BREAKTHROUGH, strength recovery +46%",
+    "discipline level 2: DEAD END, nothing gained, the line is closed",
+    "mining level 1: BREAKTHROUGH, steel yield +8%",
+    "medicine level 3: DEAD END, nothing gained, the line is closed",
+    "mining level 2: DEAD END, nothing gained, the line is closed",
+    "drilling level 1: BREAKTHROUGH, oil yield +12%",
+    "inf.protection level 1: BREAKTHROUGH, inf dfn +9%",
+    "drilling level 2: BREAKTHROUGH, oil yield +10%",
+    "inf.protection level 2: DEAD END, nothing gained, the line is closed",
+    "fieldworks level 1: BREAKTHROUGH, fort building +20%",
+    "drilling level 3: DEAD END, nothing gained, the line is closed",
+    "fieldworks level 2: BREAKTHROUGH, fort building +39%",
+    "refining level 1: BREAKTHROUGH, rare yield +9%",
+    "refining level 2: DEAD END, nothing gained, the line is closed",
+    "fieldworks level 3: BREAKTHROUGH, fort building +42%",
+    "cav.mobility level 1: BREAKTHROUGH, cav spd +7%",
+    "grn.protection level 1: BREAKTHROUGH, grn dfn +11%"
+   ],
+   [
+    "farming level 1: BREAKTHROUGH, res yield +10%",
+    "conscription level 1: BREAKTHROUGH, manpower yield +11%",
+    "farming level 2: BREAKTHROUGH, res yield +10%",
+    "conscription level 2: BREAKTHROUGH, manpower yield +9%",
+    "farming level 3: BREAKTHROUGH, res yield +13%",
+    "conscription level 3: DEAD END, nothing gained, the line is closed",
+    "staffwork level 1: BREAKTHROUGH, prepared-attack build-up +47%",
+    "drill level 1: BREAKTHROUGH, new units start with +10 experience",
+    "staffwork level 2: BREAKTHROUGH, prepared-attack build-up +47%",
+    "drill level 2: BREAKTHROUGH, new units start with +9 experience",
+    "staffwork level 3: DEAD END, nothing gained, the line is closed",
+    "drill level 3: DEAD END, nothing gained, the line is closed",
+    "inf.weapons level 1: BREAKTHROUGH, inf atk +8%",
+    "grn.weapons level 1: BREAKTHROUGH, grn atk +8%",
+    "inf.weapons level 2: DEAD END, nothing gained, the line is closed",
+    "grn.weapons level 2: DEAD END, nothing gained, the line is closed",
+    "art.weapons level 1: BREAKTHROUGH, art atk +6%",
+    "mining level 1: BREAKTHROUGH, steel yield +13%",
+    "art.weapons level 2: BREAKTHROUGH, art atk +10%",
+    "mining level 2: BREAKTHROUGH, steel yield +7%",
+    "art.weapons level 3: DEAD END, nothing gained, the line is closed",
+    "mining level 3: BREAKTHROUGH, steel yield +14%",
+    "logistics level 1: DEAD END, nothing gained, the line is closed",
+    "medicine level 1: BREAKTHROUGH, strength recovery +39%",
+    "discipline level 1: BREAKTHROUGH, new units +7 morale, morale recovery +14%",
+    "medicine level 2: DEAD END, nothing gained, the line is closed",
+    "discipline level 2: DEAD END, nothing gained, the line is closed",
+    "inf.protection level 1: BREAKTHROUGH, inf dfn +11%",
+    "industry level 1: DEAD END, nothing gained, the line is closed",
+    "inf.protection level 2: DEAD END, nothing gained, the line is closed",
+    "fieldworks level 1: BREAKTHROUGH, fort building +31%",
+    "art.protection level 1: DEAD END, nothing gained, the line is closed",
+    "fieldworks level 2: BREAKTHROUGH, fort building +29%",
+    "grn.protection level 1: BREAKTHROUGH, grn dfn +15%",
+    "grn.protection level 2: BREAKTHROUGH, grn dfn +12%"
+   ]
+  ],
+  "bank": [
+   {
+    "res": 191,
+    "steel": 3084,
+    "oil": 4174,
+    "rare": 2478
+   },
+   {
+    "res": 50011,
+    "steel": 7452,
+    "oil": 5358,
+    "rare": 988
+   },
+   {
+    "res": 42567,
+    "steel": 13330,
+    "oil": 7112,
+    "rare": 3944
+   }
+  ],
+  "kinds": [
+   {
+    "inf": 1715,
+    "mil": 14,
+    "arm": 6,
+    "mtn": 45,
+    "eng": 318,
+    "art": 676,
+    "mot": 5,
+    "cav": 507,
+    "atg": 419,
+    "grn": 487,
+    "rec": 4
+   },
+   {
+    "inf": 626,
+    "mil": 12,
+    "arm": 4,
+    "mtn": 8,
+    "art": 5,
+    "eng": 4,
+    "mot": 9,
+    "cav": 778,
+    "rec": 4
+   },
+   {
+    "inf": 2741,
+    "mtn": 9,
+    "art": 1015,
+    "mot": 6,
+    "mil": 17,
+    "arm": 9,
+    "eng": 7,
+    "grn": 1084,
+    "atg": 6,
+    "rec": 7
+   }
+  ]
+ }
+}

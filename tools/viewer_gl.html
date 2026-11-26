@@ -1,0 +1,535 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ridgeline Theater</title>
+<style>
+:root{color-scheme:dark;--bg:#0d1014;--fg:#e8eaee;--mut:#8f98a6;--panel:rgba(20,24,31,.92);--line:#2b323e;--acc:#ffcf5a}
+*{box-sizing:border-box}html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:13px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;overflow:hidden}
+#stage{position:fixed;inset:0}
+#gl,#ov{position:absolute;inset:0;width:100%;height:100%}
+#ov{pointer-events:none}
+#gl{cursor:grab}#gl.drag{cursor:grabbing}
+.panel{position:absolute;background:var(--panel);border:1px solid var(--line);border-radius:8px;backdrop-filter:blur(6px)}
+#side{top:12px;right:12px;width:300px;max-height:calc(100% - 110px);display:flex;flex-direction:column;overflow:hidden}
+#side h2{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut);margin:0;padding:10px 12px 6px}
+#facs{overflow:auto;flex:1;padding:0 6px 8px}
+.fac{display:grid;grid-template-columns:12px 1fr auto auto;gap:6px;align-items:center;padding:3px 6px;border-radius:4px;cursor:pointer;font-variant-numeric:tabular-nums}
+.fac:hover{background:#ffffff10}.fac.on{background:#ffffff1c;outline:1px solid #ffffff40}.fac.dead{opacity:.4;text-decoration:line-through}
+.sw{width:12px;height:12px;border-radius:3px}
+.mut{color:var(--mut)}.num{font-variant-numeric:tabular-nums}
+#info{top:12px;left:12px;width:330px;max-height:calc(100% - 110px);overflow:auto;padding:12px;display:none}
+#info h3{margin:0 0 4px;font-size:15px}
+#info table{width:100%;border-collapse:collapse;margin-top:6px}#info td{padding:2px 0;vertical-align:top}#info td:first-child{color:var(--mut);width:42%}
+.bar{height:6px;background:#ffffff18;border-radius:3px;overflow:hidden;margin-top:3px}.bar>i{display:block;height:100%}
+#bottom{left:12px;right:12px;bottom:12px;padding:8px 12px;display:grid;grid-template-columns:auto auto 1fr auto;gap:12px;align-items:center}
+button,select{background:#262d38;color:var(--fg);border:1px solid var(--line);border-radius:5px;padding:5px 10px;font:inherit;cursor:pointer}
+button:hover{background:#313a48}button.on{background:#5a6a86;border-color:#a9bbd8;color:#fff}
+#seek{width:100%}
+#clock{font-variant-numeric:tabular-nums;min-width:170px}
+#tip{position:absolute;pointer-events:none;background:rgba(10,12,16,.92);border:1px solid #3a4250;border-radius:5px;padding:5px 8px;font-size:12px;display:none;white-space:nowrap;z-index:5}
+#drop{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;background:var(--bg);z-index:10;text-align:center;padding:16px}
+#drop .box{border:2px dashed #3d4655;border-radius:12px;padding:40px 48px;max-width:560px}
+#drop.hover .box{border-color:var(--acc)}
+#ticker{position:absolute;left:12px;bottom:70px;width:420px;max-width:calc(100% - 24px);font-size:12px;pointer-events:none}
+#ticker div{background:rgba(10,12,16,.7);padding:2px 8px;border-radius:4px;margin-top:2px;width:fit-content;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#chart{width:100%;height:70px;display:block;cursor:pointer}
+#modes{display:flex;gap:4px;flex-wrap:wrap;padding:6px 12px 8px;border-top:1px solid var(--line)}
+#modes button{padding:3px 8px;font-size:12px}
+#help{font-size:11px;padding:4px 12px 10px;color:var(--mut)}
+@media (max-width:760px){#side{width:220px}#info{width:calc(100% - 24px)}#bottom{grid-template-columns:auto 1fr auto}#clock{grid-column:1/-1}}
+</style></head><body>
+<div id="stage"><canvas id="gl"></canvas><canvas id="ov"></canvas>
+<div id="tip"></div>
+<div id="info" class="panel"></div>
+<div id="ticker"></div>
+<div id="side" class="panel"><h2>Factions <span class="mut" style="text-transform:none;letter-spacing:0">· click to focus</span></h2>
+<canvas id="chart"></canvas>
+<div id="facs"></div>
+<div id="modes"><button data-m="0" class="on">Political</button><button data-m="1">Terrain</button><button data-m="2">Supply</button><button data-m="3">Forts</button>
+<button id="bFog" title="Pick a faction first: shows only what that faction sees">Fog</button><button id="bShots" class="on">Fire</button><button id="bLabels" class="on">Labels</button></div>
+<div id="help">Drag: pan · Wheel: zoom · Click: inspect · Space: play/pause · ←/→: ±1 day · F: follow selected · Esc: clear</div></div>
+<div id="bottom" class="panel"><button id="play">▶</button><select id="speed">
+<option value="0.5">0.5x</option><option value="1" selected>1x (2 h/s)</option><option value="2">2x</option><option value="4">4x</option>
+<option value="8">8x</option><option value="16">16x</option><option value="48">48x</option></select>
+<input id="seek" type="range" min="0" max="1000" step="0.01" value="0"><div id="clock" class="num">—</div></div>
+<div id="drop"><div class="box"><h2 style="margin:0 0 8px">Ridgeline Theater</h2>
+<p class="mut">Drop a <b>.rlr</b> replay here (made by <code>tools/record_replay.py</code>) or pick one.</p>
+<p><input type="file" id="file" accept=".rlr"></p><p id="lstat" class="mut"></p></div></div>
+</div>
+<script>
+"use strict";
+// ---------------------------------------------------------------- constants
+const PAL=(()=>{const o=[];for(let i=0;i<32;i++){const h=(i*137.508)%360,sat=[68,58,75][i%3],l=[52,44,60][(i>>1)%3];
+  const f=n=>{const k=(n+h/30)%12,a=sat/100*Math.min(l/100,1-l/100);return Math.round(255*(l/100-a*Math.max(-1,Math.min(k-3,9-k,1)))).toString(16).padStart(2,"0")};o.push("#"+f(0)+f(8)+f(4))}return o})();
+const TYPE_NAME={inf:"Infantry",mil:"Militia",mtn:"Mountain infantry",mot:"Motorised infantry",arm:"Armour",art:"Artillery",eng:"Engineers",rec:"Recon",cav:"Cavalry",grn:"Grenadiers",atg:"Anti-tank guns",mec:"Mechanised infantry",hvt:"Heavy tanks",rkt:"Rocket artillery"};
+const GLYPH={inf:0,mil:1,mtn:2,mot:3,arm:4,art:5,eng:6,rec:7,cav:8,grn:9,atg:10,mec:11,hvt:12,rkt:13};
+const TERR={plain:0,forest:1,hill:2,mountain:3,water:4};
+const BIOME={"":0,desert:1,tundra:2};
+const XPN=["green","trained","regular","veteran","elite"];
+const qs=new URLSearchParams(location.search);
+const VIDEO=qs.has("video");
+// bit 1 = seen now, bit 2 = ever explored, for faction o (needs a replay recorded with visibility)
+function visOf(a,o,p){if(!a.V)return 3;const nb=(R.np+7)>>3;const v=(a.V[(2*o)*nb+(p>>3)]>>(p&7))&1,e=(a.V[(2*o+1)*nb+(p>>3)]>>(p&7))&1;return v|(e<<1)}
+function hex(c){return [parseInt(c.slice(1,3),16),parseInt(c.slice(3,5),16),parseInt(c.slice(5,7),16)]}
+function fcol(o,a=1){const c=hex(PAL[o%PAL.length]);return `rgba(${c[0]},${c[1]},${c[2]},${a})`}
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
+
+// ---------------------------------------------------------------- replay file
+async function inflate(u8){
+  const ds=new DecompressionStream("deflate");const s=new Blob([u8]).stream().pipeThrough(ds);
+  return new Uint8Array(await new Response(s).arrayBuffer());
+}
+class Replay{
+  constructor(buf){
+    this.buf=buf;const dv=new DataView(buf);const L=buf.byteLength;
+    if(new TextDecoder().decode(new Uint8Array(buf,0,4))!=="RLR1")throw new Error("not a Ridgeline replay (.rlr)");
+    const off=dv.getUint32(L-12,true),len=dv.getUint32(L-8,true);
+    this.h=JSON.parse(new TextDecoder().decode(new Uint8Array(buf,off,len)));
+    this.frames=this.h.frames;this.T=this.frames.map(f=>f[2]);this.cache=new Map();this.pending=new Map();
+    this.sc=this.h.scene;this.np=this.sc.provs.length;this.nf=this.h.factions.length;
+  }
+  async init(){const c=this.h.cells;const b=await inflate(new Uint8Array(this.buf,c[0],c[1]));this.cells=new Int16Array(b.buffer,0,b.byteLength>>1)}
+  idxAt(t){let lo=0,hi=this.T.length-1;if(t<=this.T[0])return 0;while(lo<hi){const m=(lo+hi+1)>>1;if(this.T[m]<=t)lo=m;else hi=m-1}return lo}
+  async raw(i){const f=this.frames[i];return inflate(new Uint8Array(this.buf,f[0],f[1]))}
+  decode(b,prev){
+    const dv=new DataView(b.buffer,b.byteOffset,b.byteLength);const H=k=>dv.getInt32(k*4,true);
+    const t=H(0),key=H(1),N=H(2),P=H(3),S=H(4),ML=H(5);let o=32;
+    const ids=new Int32Array(N);{let acc=0;for(let i=0;i<N;i++){acc+=dv.getInt32(o+i*4,true);ids[i]=acc}}o+=4*N;
+    const C=[];for(let k=0;k<17;k++){C.push(b.slice(o,o+N));o+=N}
+    const PV=[];for(let k=0;k<3;k++){PV.push(b.slice(o,o+P));o+=P}
+    let V=null;if(this.h.vis){const nb=(P+7)>>3;V=b.slice(o,o+2*this.nf*nb);o+=2*this.nf*nb}
+    const shots=new Uint16Array(b.slice(o,o+4*S).buffer);o+=4*S;
+    const meta=JSON.parse(new TextDecoder().decode(b.subarray(o,o+ML)));
+    if(!key){
+      if(!prev)throw new Error("delta frame without base");
+      const pi=prev.ids,pc=prev.C;let j=0;
+      for(let i=0;i<N;i++){const id=ids[i];while(j<pi.length&&pi[j]<id)j++;
+        if(j<pi.length&&pi[j]===id){for(let k=0;k<17;k++)C[k][i]=(C[k][i]+pc[k][j])&255}}
+      for(let k=0;k<3;k++){const a=PV[k],p=prev.PV[k];for(let i=0;i<P;i++)a[i]=(a[i]+p[i])&255}
+      if(V){const p=prev.V;for(let i=0;i<V.length;i++)V[i]^=p[i]}
+    }
+    const x=new Float32Array(N),y=new Float32Array(N);
+    for(let i=0;i<N;i++){x[i]=(C[0][i]|(C[1][i]<<8))/20;y[i]=(C[2][i]|(C[3][i]<<8))/20}
+    return {t,N,ids,C,PV,V,x,y,shots,meta};
+  }
+  // decoded frame i; delta frames need i-1, so walk forward from the nearest cached frame or key frame
+  async get(i){
+    if(this.cache.has(i))return this.cache.get(i);
+    if(this.pending.has(i))return this.pending.get(i);
+    const p=(async()=>{
+      let s=i;while(s>0&&!this.frames[s][3]&&!this.cache.has(s-1))s--;
+      let prev=this.cache.has(s-1)&&!this.frames[s][3]?this.cache.get(s-1):null;
+      if(this.frames[s][3])prev=null;
+      let fr=null;
+      for(let k=s;k<=i;k++){fr=this.cache.get(k)||this.decode(await this.raw(k),prev);this.put(k,fr);prev=fr}
+      return fr;})();
+    this.pending.set(i,p);try{return await p}finally{this.pending.delete(i)}
+  }
+  put(k,fr){this.cache.set(k,fr);if(this.cache.size>90){const ks=[...this.cache.keys()].sort((a,b)=>Math.abs(a-cur.i)-Math.abs(b-cur.i));for(const d of ks.slice(60))this.cache.delete(d)}}
+}
+
+// ---------------------------------------------------------------- GL setup
+const cv=document.getElementById("gl"),ov=document.getElementById("ov"),ctx=ov.getContext("2d");
+const gl=cv.getContext("webgl2",{antialias:true,premultipliedAlpha:false,preserveDrawingBuffer:VIDEO});
+if(!gl)alert("WebGL2 is required");
+function sh(type,src){const s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(s)+"\n"+src.split("\n").map((l,i)=>(i+1)+": "+l).join("\n"));return s}
+function prog(vs,fs){const p=gl.createProgram();gl.attachShader(p,sh(gl.VERTEX_SHADER,vs));gl.attachShader(p,sh(gl.FRAGMENT_SHADER,fs));gl.linkProgram(p);if(!gl.getProgramParameter(p,gl.LINK_STATUS))throw new Error(gl.getProgramInfoLog(p));
+  const u={};const n=gl.getProgramParameter(p,gl.ACTIVE_UNIFORMS);for(let i=0;i<n;i++){const a=gl.getActiveUniform(p,i);u[a.name.replace(/\[0\]$/,"")]=gl.getUniformLocation(p,a.name)}return {p,u}}
+const HDR="#version 300 es\nprecision highp float;precision highp int;precision highp isampler2D;\n";
+const CAM=`uniform vec2 uCenter;uniform float uScale;uniform vec2 uView;
+vec2 w2c(vec2 w){vec2 s=(w-uCenter)*uScale;return vec2(s.x/(uView.x*.5),-s.y/(uView.y*.5));}`;
+
+// map: one full-screen triangle; every pixel looks up its province
+const mapP=prog(HDR+`out vec2 vS;uniform vec2 uView;void main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);vS=p;gl_Position=vec4(p*2.-1.,0,1);}`,
+HDR+`in vec2 vS;out vec4 o;
+uniform vec2 uCenter;uniform float uScale;uniform vec2 uView;uniform ivec2 uGrid;uniform float uTime;uniform int uMode;uniform int uFocus;uniform int uSelP;uniform bool uFog;
+uniform isampler2D uCells;uniform sampler2D uStat;uniform sampler2D uDyn;uniform sampler2D uPal;uniform sampler2D uHeight;
+int pid(vec2 c){ivec2 i=ivec2(floor(c));if(i.x<0||i.y<0||i.x>=uGrid.x||i.y>=uGrid.y)return -1;return texelFetch(uCells,i,0).r;}
+vec4 st(int id){return texelFetch(uStat,ivec2(id%4096,id/4096),0)*255.;}
+vec4 dy(int id){return texelFetch(uDyn,ivec2(id%4096,id/4096),0)*255.;}
+int own(int id){if(id<0)return -1;return int(dy(id).r+.5)-1;}
+bool water(int id){return id<0||int(st(id).r+.5)==4;}
+vec3 pal(int o){return texelFetch(uPal,ivec2(o,0),0).rgb;}
+float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x),f.y);}
+float fbm(vec2 p){float s=0.,a=.5;for(int i=0;i<4;i++){s+=a*noise(p);p*=2.03;a*=.5;}return s;}
+void main(){
+  vec2 px=vec2(gl_FragCoord.x,uView.y-gl_FragCoord.y);
+  vec2 c=(px-uView*.5)/uScale+uCenter;
+  float pw=1./uScale;                       // one pixel in map cells
+  int id=pid(c);
+  vec2 hu=c/vec2(uGrid);
+  if(c.x<0.||c.y<0.||c.x>=float(uGrid.x)||c.y>=float(uGrid.y)){o=vec4(.02,.035,.06,1);return;}
+  int fv=3;if(uFog&&id>=0)fv=int(dy(id).a+.5);
+  if(water(id)){
+    float n=fbm(c*.35+vec2(uTime*.02,0.))*.6+fbm(c*1.7-uTime*.05)*.4;
+    vec3 col=mix(vec3(.035,.09,.16),vec3(.07,.17,.28),n);
+    // coast foam: land within a few cells
+    float h=texture(uHeight,hu).g; col=mix(col,vec3(.16,.30,.40),smoothstep(.05,.5,h)*.6);
+    if(id>=0||true){bool near=false;for(int k=0;k<4;k++){vec2 d=vec2(k==0?1.:k==1?-1.:0.,k==2?1.:k==3?-1.:0.)*max(pw*1.5,.12);if(!water(pid(c+d)))near=true;}
+      if(near)col=mix(col,vec3(.75,.85,.9),.5);}
+    if(uFog&&uFocus>=0)col*=.55;
+    o=vec4(col,1);return;
+  }
+  vec4 S=st(id);vec4 Dn=dy(id);int ter=int(S.r+.5);float elev=S.g;int bio=int(S.b+.5);int flags=int(S.a+.5);
+  int ow=int(Dn.r+.5)-1;float fort=Dn.g;float stock=Dn.b/255.;
+  // relief: smoothed height field + fine noise, lit from the north-west
+  float e=1./vec2(uGrid).x;
+  float h0=texture(uHeight,hu).r;float hx=texture(uHeight,hu+vec2(e*1.,0)).r-texture(uHeight,hu-vec2(e*1.,0)).r;float hy=texture(uHeight,hu+vec2(0,e*2.8)).r-texture(uHeight,hu-vec2(0,e*2.8)).r;
+  float dn=fbm(c*2.2)-.5;
+  vec3 nrm=normalize(vec3(-hx*9.-dn*.15*(.3+elev*.5),-hy*9.-dn*.15*(.3+elev*.5),1.));
+  float light=clamp(dot(nrm,normalize(vec3(-.6,-.7,.9))),0.,1.);
+  vec3 base;
+  if(ter==1)base=vec3(.20,.33,.17);else if(ter==2)base=vec3(.52,.47,.30);else if(ter==3)base=vec3(.62,.60,.58);else base=vec3(.38,.49,.26);
+  if(elev>.5&&ter<2)base=mix(base,vec3(.50,.52,.33),.35);
+  if(bio==1)base=mix(base,vec3(.80,.70,.47),.85);if(bio==2)base=mix(base,vec3(.72,.77,.76),.8);
+  if(ter==3)base=mix(base,vec3(.95),smoothstep(.55,.85,h0+dn*.2)*.8);
+  if(ter==1)base*=.85+.3*noise(c*3.);
+  vec3 col=base*(.55+.65*light);
+  bool dim=uFocus>=0&&ow!=uFocus;
+  float tint=mix(.46,.26,smoothstep(3.,20.,uScale));
+  if(uMode==0&&ow>=0){col=mix(col,pal(ow),dim?.1:tint);}
+  if(uMode==2){vec3 sc=mix(vec3(.8,.15,.1),vec3(.2,.8,.35),stock);col=mix(col*.6,sc,ow>=0?.55:0.);}
+  if(uMode==3&&ow>=0){col=mix(col,pal(ow),.18);}
+  if(fort>.5&&(uMode==3||uScale>5.)){float hatch=step(.82,fract((c.x+c.y)*2.));col=mix(col,vec3(.08),hatch*(.06+.07*fort)*(uMode==3?3.:1.));}
+  if(dim)col=mix(col,vec3(dot(col,vec3(.3,.59,.11))),.6)*.75;
+  // borders: province (thin, when zoomed), faction (bright line + inner glow)
+  float d1=max(pw*1.2,.04);bool pb=false,fb=false;int fo=ow;
+  for(int k=0;k<4;k++){vec2 d=vec2(k==0?1.:k==1?-1.:0.,k==2?1.:k==3?-1.:0.);int q=pid(c+d*d1);if(q!=id){pb=true;int qo=water(q)?-2:own(q);if(qo!=ow&&qo!=-2)fb=true;}}
+  float glow=0.;
+  if(ow>=0&&uMode!=1){for(int k=0;k<8;k++){float a=float(k)*.785;vec2 d=vec2(cos(a),sin(a))*max(pw*5.,.25);int q=pid(c+d);int qo=water(q)?ow:own(q);if(qo!=ow)glow+=.125;}}
+  if(ow>=0&&uMode!=1)col=mix(col,pal(ow)*1.15,glow*.5*(dim?.3:1.));
+  if(pb&&uScale>3.)col=mix(col,vec3(0),.28*smoothstep(3.,8.,uScale));
+  if(fb&&uMode!=1)col=mix(col,ow>=0?pal(ow)*1.25+.08:vec3(.9),.9);
+  if(id==uSelP&&pb)col=vec3(1,.9,.4);
+  if(uFog){if((fv&2)==0)col=vec3(.03,.035,.045)+fbm(c*.8)*.04;else if((fv&1)==0)col=mix(col,vec3(dot(col,vec3(.3,.59,.11))),.7)*.5;}
+  o=vec4(col,1);
+}`);
+
+// units: instanced quads with a NATO-like symbol per type
+const unitP=prog(HDR+CAM+`layout(location=0)in vec2 aQ;layout(location=1)in vec4 aA;layout(location=2)in vec4 aB;
+out vec2 vQ;flat out vec4 vB;flat out float vPx;flat out vec3 vCol;flat out float vSel;uniform float uPx;uniform sampler2D uPal;uniform int uFocus;uniform float uTime;
+void main(){vB=aB;float px=uPx;vPx=px;vQ=aQ;int ow=int(aB.x+.5);vCol=texelFetch(uPal,ivec2(ow,0),0).rgb;vSel=aA.w;
+ float big=aA.w>.5?1.5:1.;vec2 wp=aA.xy+aQ*vec2(.75,.55)*(px*big/uScale);
+ gl_Position=vec4(w2c(wp),0,1);}`,
+HDR+`in vec2 vQ;flat in vec4 vB;flat in float vPx;flat in vec3 vCol;flat in float vSel;out vec4 o;uniform float uTime;uniform int uFocus;
+float seg(vec2 p,vec2 a,vec2 b){vec2 pa=p-a,ba=b-a;float h=clamp(dot(pa,ba)/dot(ba,ba),0.,1.);return length(pa-ba*h);}
+void main(){
+ int ty=int(vB.y+.5);float str=vB.z/100.;int fl=int(vB.w+.5);int ow=int(vB.x+.5);
+ vec2 p=vQ*vec2(1.,.733);           // rect half size 1 x .733
+ float aa=2./vPx;
+ float box=max(abs(p.x)-.86,abs(p.y)-.6);
+ vec3 fill=vCol*(.85+.15*str);
+ bool dim=uFocus>=0&&ow!=uFocus;
+ float a=1.-smoothstep(-aa*.5,aa*.5,box);
+ if(a<=0.)discard;
+ vec3 col=fill;float ol=smoothstep(-aa*1.6,-aa*.4,box);
+ vec3 ink=vec3(.06);
+ if(vPx>9.){
+   float g=1e3;vec2 q=p;float lw=.085;
+   if(ty==0||ty==1||ty==2||ty==3||ty==9||ty==11){g=min(seg(q,vec2(-.86,-.6),vec2(.86,.6)),seg(q,vec2(-.86,.6),vec2(.86,-.6)));}
+   if(ty==1)g=max(g,-1.)+0.;
+   if(ty==2)g=min(g,abs(max(abs(q.x)*1.2+(q.y-.6)*1.,-(q.y-.25)))*1.+0.0+ (q.y>.25?0.:9.));
+   if(ty==3)g=min(g,abs(q.x));
+   if(ty==9)g=min(g,abs(q.y+.42));
+   if(ty==4||ty==11||ty==12){float e=abs(length(q*vec2(1.,1.55))-.55);g=min(g,e);}
+   if(ty==12){float e=abs(length(q*vec2(1.,1.55))-.3);g=min(g,e);}
+   if(ty==5||ty==13){g=min(g,length(q)-.18);if(ty==13){g=min(g,length(q-vec2(.42,0))-.14);g=min(g,length(q+vec2(.42,0))-.14);}}
+   if(ty==6){g=min(g,seg(q,vec2(-.5,-.15),vec2(.5,-.15)));g=min(g,seg(q,vec2(-.5,-.15),vec2(-.5,.25)));g=min(g,seg(q,vec2(.5,-.15),vec2(.5,.25)));g=min(g,seg(q,vec2(0.,-.15),vec2(0.,.25)));}
+   if(ty==7)g=seg(q,vec2(-.86,.6),vec2(.86,-.6));
+   if(ty==8){g=seg(q,vec2(-.86,-.6),vec2(.86,.6));}
+   if(ty==10){g=min(seg(q,vec2(-.6,.45),vec2(0.,-.4)),seg(q,vec2(.6,.45),vec2(0.,-.4)));}
+   float gl=1.-smoothstep(lw-aa*.5,lw+aa*.5,g);
+   if(ty==1)gl*=step(.5,fract((q.x+q.y)*3.))*.8+.2;
+   col=mix(col,ink,gl*.9);
+   if(vPx>13.){float sb=step(-.6,p.y)*step(p.y,-.44);float sf=step(p.x,-.86+1.72*str);col=mix(col,mix(vec3(.9,.2,.15),vec3(.3,.95,.4),str),sb*sf*.95);}
+ }
+ col=mix(col,ink,ol*(vPx>7.?.85:.35));
+ if((fl&3)!=0){float fl2=.5+.5*sin(uTime*25.+vQ.x*3.);col=mix(col,vec3(1.,.85,.3),ol*fl2);}
+ if((fl&8)!=0){col=mix(col,vec3(1.),.35+.35*sin(uTime*12.));}
+ if(vSel>.5)col=mix(col,vec3(1.),ol);
+ if(dim){col=mix(col,vec3(dot(col,vec3(.3,.6,.1))),.7)*.6;a*=.55;}
+ o=vec4(col,a);
+}`);
+
+// glow sprites (muzzle flashes, impacts, battle zones), additive
+const glowP=prog(HDR+CAM+`layout(location=0)in vec2 aQ;layout(location=1)in vec4 aA;layout(location=2)in vec4 aB;out vec2 vQ;flat out vec4 vB;
+void main(){vQ=aQ;vB=aB;vec2 wp=aA.xy+aQ*aA.z;gl_Position=vec4(w2c(wp),0,1);}`,
+HDR+`in vec2 vQ;flat in vec4 vB;out vec4 o;void main(){float r=length(vQ);if(r>1.)discard;float k=pow(1.-r,vB.w);o=vec4(vB.rgb*k,k);}`);
+
+// tracers: a segment from shooter to target with a moving bright slug
+const lineP=prog(HDR+CAM+`layout(location=0)in vec2 aQ;layout(location=1)in vec4 aA;layout(location=2)in vec4 aB;out float vS;out float vW;flat out vec4 vB;uniform float uW;
+void main(){vec2 a=aA.xy,b=aA.zw;vec2 d=b-a;float L=max(length(d),1e-4);vec2 n=vec2(-d.y,d.x)/L;vec2 wp=mix(a,b,aQ.x)+n*aQ.y*uW;vS=aQ.x;vW=aQ.y;vB=aB;gl_Position=vec4(w2c(wp),0,1);}`,
+HDR+`in float vS;in float vW;flat in vec4 vB;out vec4 o;uniform float uTime;
+void main(){float ph=fract(uTime*vB.w+vB.z);float slug=exp(-pow((vS-ph)*9.,2.));float w=1.-abs(vW);
+ vec3 c=vB.x>.5?vec3(1.,.55,.2):vec3(1.,.9,.55);float a=(.10+.9*slug)*w;o=vec4(c*a,a);}`);
+
+const quad=new Float32Array([-1,-1,1,-1,-1,1,1,1]);
+function mkInst(stride){const vao=gl.createVertexArray();gl.bindVertexArray(vao);const qb=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,qb);gl.bufferData(gl.ARRAY_BUFFER,quad,gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,2,gl.FLOAT,false,0,0);const ib=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,ib);
+  gl.enableVertexAttribArray(1);gl.vertexAttribPointer(1,4,gl.FLOAT,false,32,0);gl.vertexAttribDivisor(1,1);
+  gl.enableVertexAttribArray(2);gl.vertexAttribPointer(2,4,gl.FLOAT,false,32,16);gl.vertexAttribDivisor(2,1);gl.bindVertexArray(null);return {vao,ib,cap:0}}
+const UI=mkInst(),GI=mkInst(),LI=mkInst();
+{ // line quad uses x in 0..1
+  gl.bindVertexArray(LI.vao);const qb=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,qb);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([0,-1,1,-1,0,1,1,1]),gl.STATIC_DRAW);gl.vertexAttribPointer(0,2,gl.FLOAT,false,0,0);gl.bindVertexArray(null);}
+function upload(I,data,n){gl.bindBuffer(gl.ARRAY_BUFFER,I.ib);if(n*32>I.cap){I.cap=Math.max(n*32*1.5|0,1024);gl.bufferData(gl.ARRAY_BUFFER,I.cap,gl.DYNAMIC_DRAW)}gl.bufferSubData(gl.ARRAY_BUFFER,0,data,0,n*8)}
+function tex(fmt,ifmt,type,w,h,data,filter){const t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);gl.pixelStorei(gl.UNPACK_ALIGNMENT,1);gl.texImage2D(gl.TEXTURE_2D,0,ifmt,w,h,0,fmt,type,data);
+  const f=filter||gl.NEAREST;gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,f);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,f);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);return t}
+
+// ---------------------------------------------------------------- state
+let R=null;const cam={x:0,y:0,s:1};const cur={T:0,i:0,a:null,b:null,map:null,playing:false,speed:1};
+let T_cells,T_stat,T_dyn,T_pal,T_height,dynBuf,provRows;
+let fog=false,mode=0,focus=-1,showShots=true,showLabels=true,sel=null,selP=-1,follow=false,hover=null;
+let inst=new Float32Array(0),posX=new Float32Array(0),posY=new Float32Array(0),gridIdx=null;
+const t0=performance.now();
+
+async function load(buf){
+  const st=document.getElementById("lstat");st.textContent="reading …";
+  R=new Replay(buf);await R.init();const sc=R.sc,gw=sc.gw,gh=sc.gh;
+  T_cells=tex(gl.RED_INTEGER,gl.R16I,gl.SHORT,gw,gh,R.cells);
+  provRows=Math.ceil(R.np/4096);const S=new Uint8Array(4096*provRows*4);
+  for(const p of sc.provs){const k=p.id*4;S[k]=TERR[p.terrain]??0;S[k+1]=p.elev;S[k+2]=BIOME[p.biome]??0;S[k+3]=(p.city?1:0)|(p.steel?2:0)|(p.oil?4:0)|(p.rare?8:0)}
+  T_stat=tex(gl.RGBA,gl.RGBA8,gl.UNSIGNED_BYTE,4096,provRows,S);dynBuf=new Uint8Array(4096*provRows*4);T_dyn=tex(gl.RGBA,gl.RGBA8,gl.UNSIGNED_BYTE,4096,provRows,dynBuf);
+  const P=new Uint8Array(64*4);for(let i=0;i<64;i++){const c=hex(PAL[i%PAL.length]);P.set([c[0],c[1],c[2],255],i*4)}T_pal=tex(gl.RGBA,gl.RGBA8,gl.UNSIGNED_BYTE,64,1,P);
+  // height field: province elevation per cell, blurred twice; G = land mask blurred (for coast shading)
+  const H=new Float32Array(gw*gh),M=new Float32Array(gw*gh);
+  for(let i=0;i<gw*gh;i++){const id=R.cells[i];if(id>=0&&sc.provs[id].terrain!=="water"){const p=sc.provs[id];H[i]=(p.elev+(p.terrain==="mountain"?1.2:0))/4.2;M[i]=1}}
+  const blur=(A,r)=>{const B=new Float32Array(A.length);for(let y=0;y<gh;y++)for(let x=0;x<gw;x++){let s=0,n=0;for(let d=-r;d<=r;d++){const xx=x+d;if(xx>=0&&xx<gw){s+=A[y*gw+xx];n++}}B[y*gw+x]=s/n}
+    const C=new Float32Array(A.length);for(let y=0;y<gh;y++)for(let x=0;x<gw;x++){let s=0,n=0;for(let d=-r;d<=r;d++){const yy=y+d;if(yy>=0&&yy<gh){s+=B[yy*gw+x];n++}}C[y*gw+x]=s/n}return C};
+  const H2=blur(blur(H,2),2),M2=blur(M,3);const HB=new Uint8Array(gw*gh*4);for(let i=0;i<gw*gh;i++){HB[i*4]=Math.min(255,H2[i]*255);HB[i*4+1]=Math.min(255,M2[i]*255)}
+  T_height=tex(gl.RGBA,gl.RGBA8,gl.UNSIGNED_BYTE,gw,gh,HB,gl.LINEAR);
+  fitView();buildFacs();document.getElementById("seek").min=R.T[0];document.getElementById("seek").max=R.T[R.T.length-1];
+  cur.T=+(qs.get("t")||R.T[0]);await setTime(cur.T,true);
+  document.getElementById("drop").style.display="none";if(!VIDEO&&!qs.has("paused"))setPlay(true);
+}
+function fitView(){const sc=R.sc;const w=cv.clientWidth,h=cv.clientHeight;cam.s=Math.min(w/sc.gw,h/sc.gh)*0.98;cam.x=sc.gw/2;cam.y=sc.gh/2}
+
+// make frames a and b current; build the id mapping a -> b for interpolation
+async function setTime(T,wait){
+  const i=R.idxAt(T);const j=Math.min(i+1,R.T.length-1);
+  const pa=R.get(i),pb=R.get(j);
+  if(wait||!R.cache.has(i)){const a=await pa;if(cur.a!==a)useFrame(i,a)}
+  else if(cur.i!==i||!cur.a)useFrame(i,R.cache.get(i));
+  if(R.cache.has(j)&&cur.b!==R.cache.get(j)){cur.b=R.cache.get(j);cur.map=null}
+  if(!R.cache.has(j))pb.then(b=>{if(cur.i===i){cur.b=b;cur.map=null}});
+  prefetch(Math.min(R.T.length-1,i+Math.ceil(cur.speed*2*0.75)+3));
+}
+// decode ahead one frame after another (a delta frame needs the one before it, so never in parallel)
+let pf=null;function prefetch(upto){if(pf)return;pf=(async()=>{for(let k=cur.i+1;k<=upto;k++)if(!R.cache.has(k))await R.get(k)})().finally(()=>pf=null)}
+function useFrame(i,a){cur.i=i;cur.a=a;cur.b=null;cur.map=null;
+  const own=a.PV[0],fort=a.PV[1],stk=a.PV[2];for(let p=0;p<R.np;p++){dynBuf[p*4]=own[p];dynBuf[p*4+1]=fort[p];dynBuf[p*4+2]=stk[p];dynBuf[p*4+3]=focus>=0?visOf(a,focus,p):3}
+  gl.bindTexture(gl.TEXTURE_2D,T_dyn);gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,4096,provRows,gl.RGBA,gl.UNSIGNED_BYTE,dynBuf);
+  updateFacs();ticker(a);if(sel)refreshInfo();}
+function mapAB(){const a=cur.a,b=cur.b;if(!b||b===a)return null;if(cur.map)return cur.map;const m=new Int32Array(a.N).fill(-1);let j=0;
+  for(let i=0;i<a.N;i++){const id=a.ids[i];while(j<b.N&&b.ids[j]<id)j++;if(j<b.N&&b.ids[j]===id)m[i]=j}return cur.map=m}
+
+// ---------------------------------------------------------------- draw
+function resize(){const d=VIDEO?1:Math.min(window.devicePixelRatio||1,2);const w=cv.clientWidth*d|0,h=cv.clientHeight*d|0;if(cv.width!==w||cv.height!==h){cv.width=w;cv.height=h;ov.width=w;ov.height=h}return d}
+function draw(time){
+  const dpr=resize();const W=cv.width,H=cv.height;gl.viewport(0,0,W,H);gl.clearColor(.03,.06,.1,1);gl.clear(gl.COLOR_BUFFER_BIT);
+  ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,W,H);if(!R||!cur.a)return;
+  const S=cam.s*dpr,tt=time/1000;const a=cur.a,b=cur.b;
+  const al=b&&b!==a?Math.max(0,Math.min(1,(cur.T-a.t)/(b.t-a.t))):0;const m=al>0?mapAB():null;
+  // map
+  gl.useProgram(mapP.p);const u=mapP.u;gl.uniform2f(u.uCenter,cam.x,cam.y);gl.uniform1f(u.uScale,S);gl.uniform2f(u.uView,W,H);gl.uniform2i(u.uGrid,R.sc.gw,R.sc.gh);
+  gl.uniform1f(u.uTime,tt);gl.uniform1i(u.uMode,mode);gl.uniform1i(u.uFocus,focus);gl.uniform1i(u.uSelP,selP);gl.uniform1i(u.uFog,fog&&focus>=0&&!!cur.a.V?1:0);
+  [[T_cells,"uCells"],[T_stat,"uStat"],[T_dyn,"uDyn"],[T_pal,"uPal"],[T_height,"uHeight"]].forEach(([t,n],k)=>{gl.activeTexture(gl.TEXTURE0+k);gl.bindTexture(gl.TEXTURE_2D,t);gl.uniform1i(u[n],k)});
+  gl.disable(gl.BLEND);gl.drawArrays(gl.TRIANGLES,0,3);
+  // unit positions (interpolated)
+  const N=a.N;if(posX.length<N){posX=new Float32Array(N*1.3|0);posY=new Float32Array(N*1.3|0);inst=new Float32Array(N*1.3*8|0)}
+  const C=a.C;const selId=sel?sel.id:-1;let selIdx=-1;const FOG=fog&&focus>=0&&!!a.V;let ni=0;const hid=FOG?(cur.hid&&cur.hid.length>=N?cur.hid:(cur.hid=new Uint8Array(N*1.3|0))):null;
+  for(let i=0;i<N;i++){let x=a.x[i],y=a.y[i];if(m){const j=m[i];if(j>=0){x+=(b.x[j]-x)*al;y+=(b.y[j]-y)*al}}posX[i]=x;posY[i]=y;
+    if(FOG){hid[i]=0;if(C[4][i]!==focus){const p=pickProvAt(x,y);if(p<0||!(visOf(a,focus,p)&1)){hid[i]=1;continue}}}
+    const k=(ni++)*8;inst[k]=x;inst[k+1]=y;inst[k+2]=0;inst[k+3]=a.ids[i]===selId?1:0;if(a.ids[i]===selId)selIdx=i;inst[k+4]=C[4][i];inst[k+5]=C[5][i];inst[k+6]=C[6][i];inst[k+7]=C[12][i]}
+  cur.pos={N,ids:a.ids};gridIdx=null;
+  if(follow&&selIdx>=0){cam.x=posX[selIdx];cam.y=posY[selIdx]}
+  gl.enable(gl.BLEND);
+  // battle zones: pulsing red glow at assaulted key points
+  const gl_=[];const pulse=.6+.4*Math.sin(tt*4);
+  for(const bt of a.meta.battles){if(fog&&focus>=0&&a.V&&!(visOf(a,focus,bt[0])&1))continue;const p=R.sc.provs[bt[0]];const r=Math.min(6,2.2+Math.sqrt(bt[3])*.35);gl_.push(p.cx,p.cy,r,0,.55*pulse,.10*pulse,.05*pulse,1.4)}
+  // shots
+  const sh=a.shots,ns=sh.length>>1;const lines=[];
+  if(showShots&&ns){for(let s=0;s<ns;s++){const i=sh[2*s],j=sh[2*s+1];if(i>=N||j>=N)continue;if(FOG&&hid[i]&&hid[j])continue;const ty=C[5][i];const art=ty===5||ty===13;
+      lines.push(posX[i],posY[i],posX[j],posY[j],art?1:0,0,(a.ids[i]*0.6180339)%1,art?.7:1.6+((a.ids[i]%7)*.15));
+      const fl=Math.max(0,Math.sin(tt*(9+(a.ids[i]%5))+a.ids[i]));
+      gl_.push(posX[i],posY[i],(art?.7:.35)+0.25*fl,0,1*fl,.75*fl,.3*fl,2.2);
+      const ex=Math.max(0,Math.sin(tt*(6+(a.ids[j]%4))+a.ids[j]*1.7));gl_.push(posX[j]+(Math.sin(a.ids[i])*.3),posY[j]+(Math.cos(a.ids[i])*.3),(art?1.1:.45)*ex,0,.9*ex,.45*ex,.12*ex,1.6)}}
+  gl.blendFunc(gl.ONE,gl.ONE);
+  if(gl_.length){const g=new Float32Array(gl_);gl.useProgram(glowP.p);gl.uniform2f(glowP.u.uCenter,cam.x,cam.y);gl.uniform1f(glowP.u.uScale,S);gl.uniform2f(glowP.u.uView,W,H);
+    upload(GI,g,g.length/8);gl.bindVertexArray(GI.vao);gl.drawArraysInstanced(gl.TRIANGLE_STRIP,0,4,g.length/8)}
+  if(lines.length){const L=new Float32Array(lines);gl.useProgram(lineP.p);const lu=lineP.u;gl.uniform2f(lu.uCenter,cam.x,cam.y);gl.uniform1f(lu.uScale,S);gl.uniform2f(lu.uView,W,H);gl.uniform1f(lu.uTime,tt);
+    gl.uniform1f(lu.uW,Math.max(.6/S,.04));upload(LI,L,L.length/8);gl.bindVertexArray(LI.vao);gl.drawArraysInstanced(gl.TRIANGLE_STRIP,0,4,L.length/8)}
+  // units on top
+  gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+  const px=Math.max(3*dpr,Math.min(34*dpr,.42*S));
+  gl.useProgram(unitP.p);const uu=unitP.u;gl.uniform2f(uu.uCenter,cam.x,cam.y);gl.uniform1f(uu.uScale,S);gl.uniform2f(uu.uView,W,H);gl.uniform1f(uu.uPx,px);gl.uniform1f(uu.uTime,tt);gl.uniform1i(uu.uFocus,focus);
+  gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,T_pal);gl.uniform1i(uu.uPal,0);
+  upload(UI,inst,ni);gl.bindVertexArray(UI.vao);gl.drawArraysInstanced(gl.TRIANGLE_STRIP,0,4,ni);gl.bindVertexArray(null);
+  overlay(S,W,H,dpr,a,tt,selIdx,px);
+}
+function w2s(x,y,S,W,H){return [(x-cam.x)*S+W/2,(y-cam.y)*S+H/2]}
+function overlay(S,W,H,dpr,a,tt,selIdx,px){
+  const sc=R.sc;ctx.textAlign="center";ctx.textBaseline="middle";const FOG=fog&&focus>=0&&!!a.V;const seen=(p,bit)=>!FOG||(visOf(a,focus,p)&bit);
+  // assault arrows
+  if(S>2.5*dpr){ctx.lineCap="round";for(const bt of a.meta.battles){if(!seen(bt[0],1))continue;const p=sc.provs[bt[0]];const [x1,y1]=w2s(p.cx,p.cy,S,W,H);if(x1<-50||y1<-50||x1>W+50||y1>H+50)continue;
+    for(const f of bt[1]){const q=sc.provs[f];let [x0,y0]=w2s(q.cx,q.cy,S,W,H);const dx=x1-x0,dy=y1-y0,L=Math.hypot(dx,dy)||1;const ux=dx/L,uy=dy/L;const xe=x1-ux*Math.min(L*.3,S*1.2),ye=y1-uy*Math.min(L*.3,S*1.2);
+      ctx.strokeStyle=fcol(bt[2],.85);ctx.lineWidth=Math.max(2,S*.35);ctx.beginPath();ctx.moveTo(x0+ux*L*.15,y0+uy*L*.15);ctx.lineTo(xe,ye);ctx.stroke();
+      const hs=Math.max(6,S*.9);ctx.fillStyle=fcol(bt[2],.95);ctx.beginPath();ctx.moveTo(xe+ux*hs,ye+uy*hs);ctx.lineTo(xe-uy*hs*.6,ye+ux*hs*.6);ctx.lineTo(xe+uy*hs*.6,ye-ux*hs*.6);ctx.fill()}}}
+  // destination line for the selected unit
+  if(selIdx>=0){const d=a.C[14][selIdx]|(a.C[15][selIdx]<<8);if(d!==65535&&d<sc.provs.length){const p=sc.provs[d];const [x0,y0]=w2s(posX[selIdx],posY[selIdx],S,W,H);const [x1,y1]=w2s(p.cx,p.cy,S,W,H);
+    ctx.setLineDash([6*dpr,5*dpr]);ctx.strokeStyle="rgba(255,255,255,.85)";ctx.lineWidth=1.5*dpr;ctx.beginPath();ctx.moveTo(x0,y0);ctx.lineTo(x1,y1);ctx.stroke();ctx.setLineDash([]);
+    ctx.beginPath();ctx.arc(x1,y1,5*dpr,0,7);ctx.stroke()}}
+  if(showLabels){
+    // faction names at the centre of their land (far zoom), capitals always, city names when close
+    const own=a.PV[0];const sx=new Float64Array(R.nf),sy=new Float64Array(R.nf),n=new Float64Array(R.nf);
+    for(let i=0;i<R.np;i++){const o=own[i]-1;if(o>=0&&seen(i,2)){sx[o]+=sc.provs[i].cx;sy[o]+=sc.provs[i].cy;n[o]++}}
+    if(S<6*dpr){ctx.font=`600 ${Math.max(11,Math.min(22,S*4))*dpr|0}px system-ui`;for(let o=0;o<R.nf;o++)if(n[o]>4){const [x,y]=w2s(sx[o]/n[o],sy[o]/n[o],S,W,H);
+      ctx.lineWidth=3*dpr;ctx.strokeStyle="rgba(0,0,0,.65)";ctx.strokeText(R.h.factions[o].toUpperCase(),x,y);ctx.fillStyle="rgba(255,255,255,.92)";ctx.fillText(R.h.factions[o].toUpperCase(),x,y)}}
+    for(let o=0;o<sc.capitals.length;o++){const c=sc.capitals[o];if(c<0)continue;if(!seen(c,2))continue;const p=sc.provs[c];const [x,y]=w2s(p.cx,p.cy,S,W,H);if(x<-20||y<-20||x>W+20||y>H+20)continue;const ow=own[c]-1;
+      star(x,y,Math.max(5,Math.min(12,S*.9))*dpr,ow>=0?fcol(ow):"#ccc");
+      if(S>=6*dpr){ctx.font=`600 ${12*dpr}px system-ui`;lab(p.name||R.h.factions[o],x,y-14*dpr)}}
+    if(S>=7*dpr){ctx.font=`${11*dpr}px system-ui`;for(const p of sc.provs){if(!p.city||!p.name||sc.capitals.includes(p.id)||!seen(p.id,2))continue;const [x,y]=w2s(p.cx,p.cy,S,W,H);if(x<0||y<0||x>W||y>H)continue;
+      ctx.fillStyle="#fff";ctx.fillRect(x-2.5*dpr,y-2.5*dpr,5*dpr,5*dpr);lab(p.name,x,y+12*dpr)}}
+    if(S>=16*dpr){ctx.font=`${10*dpr}px system-ui`;for(const p of sc.provs){if(p.terrain==="water"||!seen(p.id,2))continue;const [x,y]=w2s(p.cx,p.cy,S,W,H);if(x<0||y<0||x>W||y>H)continue;
+      const r=[p.steel?"⛏":"",p.oil?"🛢":"",p.rare?"◆":""].join("");ctx.fillStyle="rgba(255,255,255,.45)";ctx.fillText("P"+p.id+(r?" "+r:""),x,y+(p.city?24:8)*dpr)}}
+  }
+  // HUD
+  const tday=Math.floor(cur.T/24),th=Math.floor(cur.T%24);ctx.textAlign="left";ctx.font=`600 ${15*dpr}px system-ui`;
+  if(VIDEO){ctx.fillStyle="rgba(10,12,16,.7)";ctx.fillRect(14*dpr,14*dpr,250*dpr,54*dpr);ctx.fillStyle="#fff";ctx.fillText(`Day ${tday+1}  ${String(th).padStart(2,"0")}:00`,26*dpr,32*dpr);
+    ctx.font=`${12*dpr}px system-ui`;ctx.fillStyle="#aab";ctx.fillText(`${a.N.toLocaleString()} units · ${a.meta.battles.length} assaults · ${a.shots.length>>1} firing`,26*dpr,52*dpr)}
+}
+function lab(t,x,y){ctx.lineWidth=3*(window.devicePixelRatio||1);ctx.strokeStyle="rgba(0,0,0,.7)";ctx.strokeText(t,x,y);ctx.fillStyle="#fff";ctx.fillText(t,x,y)}
+function star(x,y,r,c){ctx.beginPath();for(let i=0;i<10;i++){const a=-Math.PI/2+i*Math.PI/5,rr=i%2?r*.45:r;ctx.lineTo(x+Math.cos(a)*rr,y+Math.sin(a)*rr)}ctx.closePath();ctx.fillStyle=c;ctx.fill();ctx.lineWidth=1.5;ctx.strokeStyle="#000";ctx.stroke()}
+
+// ---------------------------------------------------------------- UI: factions, chart, ticker, info
+function buildFacs(){const el=document.getElementById("facs");el.innerHTML=R.h.factions.map((f,i)=>`<div class="fac" data-o="${i}"><span class="sw" style="background:${PAL[i%PAL.length]}"></span><span>${esc(f)}</span><span class="num mut" id="fp${i}"></span><span class="num" id="fu${i}"></span></div>`).join("");
+  el.onclick=e=>{const d=e.target.closest(".fac");if(!d)return;const o=+d.dataset.o;focus=focus===o?-1:o;[...el.children].forEach(c=>c.classList.toggle("on",+c.dataset.o===focus));if(cur.a)useFrame(cur.i,cur.a)};drawChart()}
+function updateFacs(){const a=cur.a;const own=a.PV[0];const n=new Int32Array(R.nf);for(let i=0;i<R.np;i++)if(own[i])n[own[i]-1]++;
+  const el=document.getElementById("facs");const rows=[...el.children];rows.sort((x,y)=>n[+y.dataset.o]-n[+x.dataset.o]);
+  for(const r of rows){const o=+r.dataset.o;const pl=a.meta.players[o];document.getElementById("fp"+o).textContent=n[o]+" prov";document.getElementById("fu"+o).textContent=pl.n.toLocaleString()+" u";r.classList.toggle("dead",!pl.alive);el.appendChild(r)}
+  const d=Math.floor(cur.T/24);document.getElementById("clock").textContent=`Day ${d+1}, ${String(Math.floor(cur.T%24)).padStart(2,"0")}:00 · ${a.N.toLocaleString()} units`;
+  document.getElementById("seek").value=cur.T;drawChartCursor()}
+let chartImg=null;
+function drawChart(){const c=document.getElementById("chart");const d=window.devicePixelRatio||1;c.width=c.clientWidth*d;c.height=c.clientHeight*d;const g=c.getContext("2d");const tl=R.h.timeline;if(!tl.length)return;
+  const W=c.width,H=c.height,T0=R.T[0],T1=R.T[R.T.length-1],X=t=>(t-T0)/Math.max(1,T1-T0)*W;let tot=0;for(const v of tl[0].prov)tot+=v;
+  for(const r of tl)tot=Math.max(tot,r.prov.reduce((a,b)=>a+b,0));
+  const base=new Float32Array(tl.length);for(let o=0;o<R.nf;o++){g.beginPath();tl.forEach((r,i)=>{const x=X(r.t),y=H-(base[i]+r.prov[o])/tot*H;i?g.lineTo(x,y):g.moveTo(x,y)});
+    for(let i=tl.length-1;i>=0;i--){g.lineTo(X(tl[i].t),H-base[i]/tot*H)}g.closePath();g.fillStyle=PAL[o%PAL.length];g.globalAlpha=.85;g.fill();tl.forEach((r,i)=>base[i]+=r.prov[o])}
+  g.globalAlpha=1;chartImg=g.getImageData(0,0,W,H);
+  c.onclick=e=>{const r=c.getBoundingClientRect();seekTo(T0+(e.clientX-r.left)/r.width*(T1-T0))}}
+function drawChartCursor(){const c=document.getElementById("chart");if(!chartImg||!c.width)return;const g=c.getContext("2d");g.putImageData(chartImg,0,0);const x=(cur.T-R.T[0])/Math.max(1,R.T[R.T.length-1]-R.T[0])*c.width;g.fillStyle="#fff";g.fillRect(x-1,0,2,c.height)}
+const tick=[];let lastTick=-1;function ticker(a){if(a.t<lastTick)tick.length=0;lastTick=a.t;const F=R.h.factions;const D=`D${Math.floor(a.t/24)+1}`;
+  const lost={};for(const e of a.meta.ev)if(e[1]==="lostprov")lost[e[2]]=e[0];
+  const sw=o=>`<span style="color:${PAL[o%PAL.length]}">■</span>`;
+  for(const e of a.meta.ev){const [o,k,t]=e;let s=null;
+    if(k==="took"&&lost[t]!=null)s=`${esc(F[o])} took ${esc(t)} from ${esc(F[lost[t]])}`;
+    else if(k==="fall"||k==="pact"||k==="intel"||k==="mail"||k==="gift"||(k==="offer"&&/ACCEPTED/.test(t)))s=`${esc(F[o])}: ${esc(t)}`;
+    else if(k==="tech")s=`${esc(F[o])} research: ${esc(t)}`;
+    else if(k==="surrender"&&Math.random()<.3)s=`${esc(F[o])}: ${esc(t)}`;
+    if(s)tick.unshift(`${sw(o)} ${D} ${s}`)}
+  tick.length=Math.min(tick.length,7);
+  document.getElementById("ticker").innerHTML=VIDEO?"":tick.map(t=>`<div>${t}</div>`).join("")}
+
+function pickUnit(mx,my){if(!cur.pos)return -1;const S=cam.s,x=(mx-cv.clientWidth/2)/S+cam.x,y=(my-cv.clientHeight/2)/S+cam.y;const rad=Math.max(.5,10/S);let best=-1,bd=rad*rad;
+  const N=cur.pos.N;const H=fog&&focus>=0&&cur.a.V?cur.hid:null;for(let i=0;i<N;i++){if(H&&H[i])continue;const dx=posX[i]-x,dy=posY[i]-y;const d=dx*dx+dy*dy;if(d<bd){bd=d;best=i}}return best}
+function pickProv(mx,my){const S=cam.s,x=Math.floor((mx-cv.clientWidth/2)/S+cam.x),y=Math.floor((my-cv.clientHeight/2)/S+cam.y);if(x<0||y<0||x>=R.sc.gw||y>=R.sc.gh)return -1;const id=R.cells[y*R.sc.gw+x];return id>=0&&R.sc.provs[id].terrain!=="water"?id:-1}
+function bar(v,c){return `<div class="bar"><i style="width:${Math.max(0,Math.min(100,v))}%;background:${c}"></i></div>`}
+function unitHTML(i){const a=cur.a,C=a.C;const ow=C[4][i],ty=R.h.types[C[5][i]],fl=C[12][i];const xp=C[7][i],mo=C[8][i],su=C[9][i],rd=C[10][i],str=C[6][i];
+  const st=R.h.states[C[11][i]];const d=C[14][i]|(C[15][i]<<8);const gi=C[16][i];const grp=gi?a.meta.groups[gi-1]:null;const gname=grp?grp.split(":").slice(1).join(":"):"";
+  const fx=grp?a.meta.fxp[ow][gname]:null;const prov=pickProvAt(posX[i],posY[i]);
+  let tgt=null;const sh=a.shots;for(let s=0;s<sh.length;s+=2)if(sh[s]===i){tgt=sh[s+1];break}
+  const pv=prov>=0?R.sc.provs[prov]:null;
+  return `<h3><span class="sw" style="display:inline-block;background:${PAL[ow%PAL.length]};vertical-align:-1px"></span> ${TYPE_NAME[ty]||ty} <span class="mut">#${a.ids[i]}</span></h3>
+  <div class="mut">${esc(R.h.factions[ow])} · mark ${C[13][i]}${fl&32?' <b style="color:#fb6">(old version — refit available)</b>':''}</div>
+  <table><tr><td>State</td><td><b>${st}</b>${fl&8?" · routing":""}${fl&64?" · preparing attack":""}${fl&16?" · digging in":""}</td></tr>
+  <tr><td>Strength</td><td>${str}${bar(str,"#4caf50")}</td></tr>
+  <tr><td>Experience</td><td>${xp} (${XPN[Math.min(4,Math.floor(xp/20))]})${bar(xp,"#64b5f6")}</td></tr>
+  <tr><td>Morale</td><td>${mo}${bar(mo,"#ffb74d")}</td></tr>
+  <tr><td>Readiness</td><td>${rd}${bar(rd,"#ba68c8")}</td></tr>
+  <tr><td>Suppression</td><td>${su}${bar(su,"#e57373")}</td></tr>
+  <tr><td>Supplied</td><td>${fl&4?"yes":"<b style='color:#f66'>no</b>"}</td></tr>
+  <tr><td>Range</td><td>${R.h.unit_ranges?.[ty]??"?"} cells</td></tr>
+  <tr><td>Position</td><td>${pv?`P${pv.id} ${esc(pv.name||"")} (${pv.terrain}${pv.biome?", "+pv.biome:""})`:"—"} <span class="mut">${posX[i].toFixed(1)}, ${posY[i].toFixed(1)}</span></td></tr>
+  <tr><td>Heading to</td><td>${d!==65535?"P"+d+" "+esc(R.sc.provs[d]?.name||""):"—"}</td></tr>
+  <tr><td>Firing at</td><td>${tgt!=null?`${TYPE_NAME[R.h.types[C[5][tgt]]]} #${a.ids[tgt]} (${esc(R.h.factions[C[4][tgt]])})`:"—"}</td></tr>
+  <tr><td>Formation</td><td>${grp?esc(gname)+" · exp "+(fx??0):"—"}</td></tr></table>
+  <p class="mut" style="margin:8px 0 0">F to follow · Esc to close</p>`}
+function pickProvAt(x,y){const gx=Math.floor(x),gy=Math.floor(y);if(gx<0||gy<0||gx>=R.sc.gw||gy>=R.sc.gh)return -1;return R.cells[gy*R.sc.gw+gx]}
+function provHTML(id){const a=cur.a,p=R.sc.provs[id];const ow=a.PV[0][id]-1,fort=a.PV[1][id],stk=a.PV[2][id]*2;
+  const cnt={};const C=a.C;for(let i=0;i<a.N;i++){if(pickProvAt(posX[i],posY[i])!==id)continue;const k=C[4][i];const t=R.h.types[C[5][i]];(cnt[k]??={})[t]=(cnt[k][t]||0)+1}
+  const bt=a.meta.battles.find(b=>b[0]===id);
+  const units=Object.entries(cnt).map(([o,c])=>`<div><span class="sw" style="display:inline-block;background:${PAL[o%PAL.length]};vertical-align:-1px"></span> ${esc(R.h.factions[o])}: ${Object.entries(c).map(([t,n])=>n+" "+t).join(", ")}</div>`).join("")||"<span class='mut'>none</span>";
+  return `<h3>P${id} ${esc(p.name||"")}</h3><div class="mut">${p.terrain}${p.biome?" · "+p.biome:""} · height ${p.elev}${p.city?" · city":""}${R.sc.capitals.includes(id)?" · capital of "+esc(R.h.factions[R.sc.capitals.indexOf(id)]):""}</div>
+  <table><tr><td>Owner</td><td>${ow>=0?`<span class="sw" style="display:inline-block;background:${PAL[ow%PAL.length]};vertical-align:-1px"></span> ${esc(R.h.factions[ow])}`:"neutral"}</td></tr>
+  <tr><td>Fort</td><td>${["none","trench","bunker line","fortress"][fort]||fort}</td></tr><tr><td>Supply stock</td><td>${stk}${bar(stk/(p.city?4:2),"#8bc34a")}</td></tr>
+  <tr><td>Yield / day</td><td>res ${p.yield}, manpower ${p.manpower}${p.steel?", steel "+p.steel:""}${p.oil?", oil "+p.oil:""}${p.rare?", rare "+p.rare:""}</td></tr>
+  <tr><td>Neighbours</td><td>${p.nbrs.length}${p.sea.length?" (+"+p.sea.length+" by sea)":""}</td></tr>
+  <tr><td>Assault</td><td>${bt?`<b style="color:#f77">${esc(R.h.factions[bt[2]])} attacking from ${bt[1].map(x=>"P"+x).join(", ")} with ${bt[3]} units</b>`:"—"}</td></tr></table>
+  <div style="margin-top:6px"><div class="mut">Units here</div>${units}</div>`}
+function refreshInfo(){const el=document.getElementById("info");if(!sel){el.style.display="none";return}
+  if(sel.kind==="u"){const a=cur.a;let i=-1;let lo=0,hi=a.N-1;while(lo<=hi){const m=(lo+hi)>>1;if(a.ids[m]===sel.id){i=m;break}if(a.ids[m]<sel.id)lo=m+1;else hi=m-1}
+    el.innerHTML=i>=0?unitHTML(i):`<h3>Unit #${sel.id}</h3><p class="mut">Destroyed or disbanded.</p>`}
+  else el.innerHTML=provHTML(sel.id);el.style.display="block"}
+
+// ---------------------------------------------------------------- input
+let drag=null;
+cv.addEventListener("pointerdown",e=>{drag={x:e.clientX,y:e.clientY,cx:cam.x,cy:cam.y,moved:false};cv.setPointerCapture(e.pointerId);cv.classList.add("drag")});
+cv.addEventListener("pointermove",e=>{if(!R)return;if(drag){const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(Math.abs(dx)+Math.abs(dy)>3){drag.moved=true;follow=false}cam.x=drag.cx-dx/cam.s;cam.y=drag.cy-dy/cam.s;return}
+  const tip=document.getElementById("tip");const i=pickUnit(e.offsetX,e.offsetY);let h="";
+  if(i>=0){const C=cur.a.C;h=`<b>${TYPE_NAME[R.h.types[C[5][i]]]}</b> · ${esc(R.h.factions[C[4][i]])} · str ${C[6][i]} · ${R.h.states[C[11][i]]}`}
+  else{const p=pickProv(e.offsetX,e.offsetY);if(p>=0){const pr=R.sc.provs[p];const ow=cur.a.PV[0][p]-1;h=`P${p} ${esc(pr.name||"")} · ${pr.terrain} · ${ow>=0?esc(R.h.factions[ow]):"neutral"}`}}
+  if(h){tip.innerHTML=h;tip.style.display="block";tip.style.left=(e.clientX+14)+"px";tip.style.top=(e.clientY+14)+"px"}else tip.style.display="none"});
+cv.addEventListener("pointerup",e=>{cv.classList.remove("drag");if(drag&&!drag.moved&&R){const i=pickUnit(e.offsetX,e.offsetY);
+  if(i>=0){sel={kind:"u",id:cur.a.ids[i]};selP=-1}else{const p=pickProv(e.offsetX,e.offsetY);sel=p>=0?{kind:"p",id:p}:null;selP=p}refreshInfo()}drag=null});
+cv.addEventListener("pointerleave",()=>document.getElementById("tip").style.display="none");
+cv.addEventListener("wheel",e=>{e.preventDefault();if(!R)return;const f=Math.exp(-e.deltaY*0.0015);const ns=Math.max(.5,Math.min(120,cam.s*f));
+  const mx=e.offsetX-cv.clientWidth/2,my=e.offsetY-cv.clientHeight/2;if(!follow){cam.x+=mx/cam.s-mx/ns;cam.y+=my/cam.s-my/ns}cam.s=ns},{passive:false});
+addEventListener("keydown",e=>{if(!R||e.target.tagName==="INPUT"&&e.target.type!=="range")return;
+  if(e.code==="Space"){e.preventDefault();setPlay(!cur.playing)}if(e.key==="ArrowRight")seekTo(cur.T+24);if(e.key==="ArrowLeft")seekTo(cur.T-24);
+  if(e.key==="Escape"){sel=null;selP=-1;follow=false;refreshInfo()}if(e.key==="f"||e.key==="F"){follow=!!sel&&sel.kind==="u"&&!follow;if(follow&&cam.s<14)cam.s=20}
+  if(e.key==="Home")fitView()});
+document.getElementById("play").onclick=()=>setPlay(!cur.playing);
+document.getElementById("speed").onchange=e=>cur.speed=+e.target.value;
+document.getElementById("seek").oninput=e=>seekTo(+e.target.value);
+document.querySelectorAll("#modes [data-m]").forEach(b=>b.onclick=()=>{mode=+b.dataset.m;document.querySelectorAll("#modes [data-m]").forEach(x=>x.classList.toggle("on",x===b))});
+document.getElementById("bFog").onclick=e=>{fog=!fog;e.target.classList.toggle("on",fog);if(cur.a)useFrame(cur.i,cur.a)};
+document.getElementById("bShots").onclick=e=>{showShots=!showShots;e.target.classList.toggle("on",showShots)};
+document.getElementById("bLabels").onclick=e=>{showLabels=!showLabels;e.target.classList.toggle("on",showLabels)};
+function setPlay(p){cur.playing=p;document.getElementById("play").textContent=p?"❚❚":"▶"}
+function seekTo(T){if(!R)return;cur.T=Math.max(R.T[0],Math.min(R.T[R.T.length-1],T));setTime(cur.T)}
+const drop=document.getElementById("drop");
+addEventListener("dragover",e=>{e.preventDefault();drop.classList.add("hover")});addEventListener("dragleave",()=>drop.classList.remove("hover"));
+addEventListener("drop",e=>{e.preventDefault();drop.classList.remove("hover");const f=e.dataTransfer.files[0];if(f)f.arrayBuffer().then(load).catch(err=>document.getElementById("lstat").textContent=err)});
+document.getElementById("file").onchange=e=>{const f=e.target.files[0];if(f){document.getElementById("lstat").textContent="loading "+f.name+" …";f.arrayBuffer().then(load).catch(err=>document.getElementById("lstat").textContent=err)}};
+
+// ---------------------------------------------------------------- loop
+let last=performance.now();let busy=false;
+function loop(now){const dt=Math.min(.1,(now-last)/1000);last=now;
+  if(R&&cur.playing&&!busy){const nt=Math.min(R.T[R.T.length-1],cur.T+dt*2*cur.speed);
+    const i=R.idxAt(nt);if(i===cur.i||R.cache.has(i)){cur.T=nt;if(i!==cur.i||!cur.b)setTime(nt)}else{busy=true;setTime(nt,true).then(()=>{cur.T=nt;busy=false})}
+    if(nt>=R.T[R.T.length-1])setPlay(false);if(i!==cur.i)document.getElementById("seek").value=cur.T}
+  draw(now-t0);if(!VIDEO)requestAnimationFrame(loop)}
+if(!VIDEO)requestAnimationFrame(loop);
+
+// ---------------------------------------------------------------- hooks for tools/make_video.mjs (and auto-load)
+window.RL={
+  load:async url=>{const r=await fetch(url);await load(await r.arrayBuffer());return {frames:R.T.length,t0:R.T[0],t1:R.T[R.T.length-1],gw:R.sc.gw,gh:R.sc.gh}},
+  // render the picture for game time T (hours, fractional) with camera {x,y,s}; returns a JPEG data URL of map + overlay
+  renderAt:async(T,c,q,vt)=>{cur.T=T;await setTime(T,true);const j=Math.min(cur.i+1,R.T.length-1);cur.b=await R.get(j);cur.map=null;if(c)Object.assign(cam,c);
+    draw((vt??T/2)*1000);const out=document.createElement("canvas");out.width=cv.width;out.height=cv.height;const g=out.getContext("2d");g.drawImage(cv,0,0);g.drawImage(ov,0,0);return out.toDataURL("image/jpeg",q||.9)},
+  hotspot:(T)=>{const a=cur.a;if(!a||!a.meta.battles.length)return null;let sx=0,sy=0,n=0;const bs=a.meta.battles;
+    // densest cluster of assaults: pick the battle with most other battles within 25 cells
+    let best=null,bn=-1;for(const b of bs){const p=R.sc.provs[b[0]];let k=0;for(const c of bs){const q=R.sc.provs[c[0]];if(Math.hypot(p.cx-q.cx,p.cy-q.cy)<25)k+=c[3]}if(k>bn){bn=k;best=p}}
+    return best?{x:best.cx,y:best.cy}:null},
+  cam,
+  setView:v=>{if(v.focus!=null)focus=typeof v.focus==="string"?R.h.factions.indexOf(v.focus):v.focus;if(v.fog!=null)fog=!!v.fog;if(v.mode!=null)mode=v.mode;
+    if(v.labels!=null)showLabels=!!v.labels;if(v.shots!=null)showShots=!!v.shots;if(cur.a)useFrame(cur.i,cur.a);return focus},
+  fit:()=>{fitView();return {...cam}},
+};
+// ?src=replay.rlr, or ?src=part.000.bin,part.001.bin,... (pieces made by rlr_tools.py split, joined in order)
+async function fetchParts(list,onp){const bufs=[];let n=0;for(const u of list){const r=await fetch(u);if(!r.ok)throw new Error(u+": "+r.status+" "+r.statusText);if(/\.b64(\.txt)?$/.test(u.split("?")[0])){const t=(await r.text()).replace(/\s+/g,"");const bin=atob(t);const v=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)v[i]=bin.charCodeAt(i);bufs.push(v)}   // base64 text pieces, for hosts that only serve text
+    else bufs.push(new Uint8Array(await r.arrayBuffer()));onp(++n,list.length)}
+  const all=new Uint8Array(bufs.reduce((s,b)=>s+b.length,0));let o=0;for(const b of bufs){all.set(b,o);o+=b.length}return all.buffer}
+const SRC=qs.get("src")||window.RL_DEFAULT_SRC;
+if(SRC&&!VIDEO){const st=document.getElementById("lstat");const list=SRC.split(",");st.textContent="loading replay …";
+  fetchParts(list,(i,n)=>st.textContent=`loading replay … ${i}/${n}`).then(load).catch(e=>st.textContent=String(e))}
+</script></body></html>

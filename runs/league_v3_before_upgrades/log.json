@@ -1,0 +1,138 @@
+{
+ "factions": [
+  "aurum",
+  "sable",
+  "cinder"
+ ],
+ "models": [
+  "claude-opus-5-5",
+  "claude-opus-5-5",
+  "claude-opus-5-5"
+ ],
+ "cost": 1.0650692,
+ "gens": [
+  {
+   "gen": 1,
+   "policies": [
+    "runs/league/aurum/gen0.py",
+    "runs/league/sable/gen0.py",
+    "runs/league/cinder/gen0.py"
+   ],
+   "summary": [
+    "war 1 with gen0 policy: places 2,1, final provinces 197,288",
+    "war 1 with gen0 policy: places 3,2, final provinces 189,561",
+    "war 1 with gen0 policy: places 1,3, final provinces 552,149"
+   ],
+   "secs": 149,
+   "results": [
+    {
+     "seed": 50,
+     "winner": 2,
+     "ticks": 3000,
+     "provinces": [
+      197,
+      189,
+      552
+     ],
+     "alive": [
+      true,
+      true,
+      true
+     ],
+     "units": [
+      811,
+      524,
+      1245
+     ],
+     "kills": [
+      480,
+      351,
+      608
+     ],
+     "start": {
+      "provs": [
+       65,
+       61,
+       83
+      ],
+      "units": [
+       124,
+       112,
+       116
+      ]
+     },
+     "policy_errors": [
+      null,
+      null,
+      null
+     ]
+    },
+    {
+     "seed": 51,
+     "winner": 0,
+     "ticks": 3000,
+     "provinces": [
+      288,
+      561,
+      149
+     ],
+     "alive": [
+      true,
+      true,
+      true
+     ],
+     "units": [
+      1573,
+      827,
+      645
+     ],
+     "kills": [
+      607,
+      169,
+      428
+     ],
+     "start": {
+      "provs": [
+       97,
+       67,
+       55
+      ],
+      "units": [
+       152,
+       102,
+       92
+      ]
+     },
+     "policy_errors": [
+      null,
+      null,
+      null
+     ]
+    }
+   ],
+   "notes": [
+    {
+     "faction": "aurum",
+     "how": "written",
+     "said": "Readiness was the main failure. Almost every assault (259 of 261) launched with readiness 0-34, and only 19 of them succeeded. Units marched to the staging area, lost readiness on the way, and attacked straight away. The plan bonus was almost never built up. Defence and expansion worked: enemy assaults on my land succeeded 12 times out of 215.\n\nChanges:\n1. **Strike groups rest before attacking.** Each group gathers at a supplied staging province next to the target. It then holds and prepares until average readiness is at least 65 and the plan bonus is at least 35%, or a time limit passes. It launches only if the battle model gives at least 0.45 to take the province.\n2. **A scout joins each strike** and stays next to the target, raising the prepared-attack cap to +75% and giving exact enemy counts.\n3. **Several strikes at once,** scaling with army size (up to 4) to keep pressure along a long front. Targets are chosen by model success probability times value, preferring low forts and visible weak garrisons.\n4. **Picking strike units uses one breadth-first search over my own land** from the staging province, instead of a path query per unit, so it stays inside the time limit.\n5. **Manpower:** no militia when the pool is low. Engineers stay at 6% of the army and artillery stays around 20%, for sieges.\n6. **After a capture,** the group holds the province briefly and then joins the front."
+    },
+    {
+     "faction": "sable",
+     "how": "written",
+     "said": "Both wars show the same pattern. Expansion went well, but assaults almost never worked: 10 of 257 taken. Nearly every assault went in at readiness 0-34 with no plan bonus. In war 2 manpower also piled up to about 9,900 unused, because I recruited at most 4 units per tick.\n\nChanges:\n1. **Recruiting.** Up to 12 units per tick while bank, manpower and net income allow. Some reserve is always kept.\n2. **Expansion.** Neutral land is the cheapest score. The cap on expanders scales with army size, about 35% of combat units with a floor of 14.\n3. **Strike discipline.**\n   - At the staging province the group prepares immediately and waits there to rest.\n   - It launches only when the plan bonus is at least 40 and readiness is at least 60, or after 60 hours.\n   - The win forecast must be at least 0.6, with a strength ratio of at least 2.5.\n   - Targets are scored assuming a 0.45 bonus and 0.75 readiness, which is how they would actually be launched. Unseen defenders are assumed stronger (220).\n   - Weakly held, high-yield and capital targets are preferred.\n   - A failing assault is broken off sooner (48 hours), and the group refits before the next one.\n4. **Scouting.** Once exploring is finished, an idle scout is sent to the staging province. A scout next to the target raises the prepare cap to +75%."
+    },
+    {
+     "faction": "cinder",
+     "how": "written",
+     "said": "Reviewing the two wars:\n\n- **Weak assaults.** Most of my assaults went in with readiness under 34 and almost no prepare bonus, and they failed (12/79 and 8/93). Assaults with a prepare bonus did much better (8/11 and 8/12). Launches will now wait for at least +25% bonus and average readiness 55 or more. Tired or weak units are left out. Estimated enemy strengths (~) are inflated by 1.3 for safety.\n- **Slow early expansion.** In war 2 I was boxed in and grew too slowly while neutral land was still open. Now almost every line unit expands while neutral land remains. I also recruit motorised units early for faster grabs, and recruit more per call when the bank is large.\n- **Small, unsupported operations.** The number of operations now scales with army size. Healthy rear units are sent toward the staging provinces of active operations, so attacks are larger and come from more directions.\n- **Rejected commands.** Recruits stop at the first rejection. I only issue orders for units not already under a standing order or path.\n- **Fort levels.** Targets with high fort levels need more artillery or a higher win probability before I attack."
+    }
+   ],
+   "next_policies": [
+    "runs/league/aurum/gen1.py",
+    "runs/league/sable/gen1.py",
+    "runs/league/cinder/gen1.py"
+   ],
+   "cost_so_far": 1.07
+  }
+ ]
+}

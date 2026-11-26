@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+runs/replays/
+runs/video/
+runs/analysis/
+runs/*.html
+runs/*.json
+runs/*.jsonl
+archive_v1_sc_style/runs/
+node_modules/
+*.mp4
+*.rlr

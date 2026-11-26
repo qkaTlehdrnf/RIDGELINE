@@ -1,0 +1,1018 @@
+"""Agent-facing interface for Ridgeline v2: one Session per player.
+
+  brief()          rules + province table + command grammar; send once (cacheable prefix).
+  obs("full")      compact text of everything the player knows.
+  obs("delta")     only lines that changed since the last obs() call, plus new events.
+  act(text)        command lines -> terse result.
+  query(text)      on-demand detail.
+  set_policy(...)  install/replace a standing-order program (python, tick(api)) that runs inside the engine.
+  obs_json()       verbose structured state (baseline for token comparison / tooling).
+
+Two ways to drive units, usable together:
+  1. policy: a program written before the game (or rewritten during it) that issues orders every few hours.
+  2. live commands: an agent that looks at the delta every few seconds and overrides or redirects.
+"""
+import math
+import time
+
+from . import data as D
+from .mapgen import ascii_map
+
+CODES = tuple(D.UNITS)
+
+
+def _need(d):
+    return "%s + %s" % (_cost(d["cost"]), " > ".join("%s %d" % kv for kv in d["needs"]))
+
+def _cost(c): return "+".join("%d %s" % (v, k) for k, v in c.items())
+
+
+def _ids(ids):
+    ids = sorted(ids); out = []; i = 0
+    while i < len(ids):
+        j = i
+        while j + 1 < len(ids) and ids[j + 1] == ids[j] + 1: j += 1
+        out.append(str(ids[i]) if i == j else "%d-%d" % (ids[i], ids[j]))
+        i = j + 1
+    return ",".join(out)
+
+
+def _counts(c):
+    return " ".join("%s×%d" % (k, c[k]) for k in CODES if k in c)
+
+
+class CmdError(Exception):
+    pass
+
+
+class Session:
+    def __init__(self, game, pid):
+        self.g = game; self.pid = pid; self.p = game.players[pid]
+        self._last = {}; self._ev = 0
+        self.policies = {}
+        self.model = {}             # learned parameters (plain JSON data) handed to policies as api.model
+        self.front = set()          # unit ids under the automatic front-line order
+        self.resting = set()        # front units pulled back to recover
+        self.counters = {}          # the policy's own tallies (api.count): shown back to the faction in its review
+        self.expand = set()         # unit ids under the standing order to keep taking neutral land
+        self.expand_to = {}         # unit id -> province the commander picked as the area to expand around
+        self.explore = set()        # unit ids under the standing order to go and look at unexplored land
+        self.no_go = set()          # unexplored provinces that turned out unreachable (water)
+        self.neutral_border = []
+        self.policy_budget_ms = 25.0
+        self.stats = dict(cmds=0, errors=0)
+        self.multi = len(game.players) > 2
+        self.sources = {}           # installed policy name -> (code, every)
+        self.candidates = {}        # strategies a commander has drafted for trials: name -> (code, every)
+
+    # ============================================================ brief
+    def brief(self):
+        g, p = self.g, self.p; eps = [e for e in g.players if e.id != self.pid]; L = []
+        L.append("RIDGELINE. You are P%d (%s) against %s. Every faction fights every other; there are no alliances." % (
+            self.pid, p.faction, (" and " if len(eps) < 4 else ", ").join("P%d (%s)" % (e.id, e.faction) for e in eps)))
+        if len(eps) < 4: L.append(" ".join(D.FACTIONS[e.faction]["blurb"] for e in [p] + eps))
+        else:
+            L.append("You: " + D.FACTIONS[p.faction]["blurb"] + " Doctrines of the others: " + "; ".join(
+                "%s = %s (%s)" % (d, D.DOCTRINES[d], " ".join("P%d" % e.id for e in eps if D.FACTIONS[e.faction]["doctrine"] == d))
+                for d in D.DOCTRINES if any(D.FACTIONS[e.faction]["doctrine"] == d for e in eps)) + ".")
+        if g.map.world:
+            L.append("THE MAP IS THE REAL WORLD (coastlines, great mountain ranges, deserts, tundra). Land masses are joined by SEA LINKS "
+                     "(straits and sea lanes, marked ~ in a province's neighbour list): units cross them like any border, only slower "
+                     "over long water, supply and sight pass over them, and fire across a sea link is x%.1f (a landing). Desert and "
+                     "tundra (d, t after the terrain letter) are harsh: +%d move-hours, almost no yield, no manpower, supplies arrive at half speed."
+                     % (D.AMPHIB, D.HARSH_COST))
+        L.append("TIME 1 tick = 1 hour, 24 = 1 day. The game runs in real time and does not wait for you.")
+        L.append("MAP is a graph of provinces. Owning a province that connects to one of your depots through your own provinces "
+                 "(a supply line) pays its yield every day. Cut-off provinces pay nothing.")
+        L.append("DEPOTS: a depot is where your supply starts and where your treasury (res, steel, oil, rare) is kept. You begin with one, in your capital, holding everything. "
+                 "`depot P<id> [weight]` opens another in any supplied province of yours (%d res, works after %d h) or changes the weight of one you have; the treasury is "
+                 "spread over your working depots in proportion to the weights, carried at %g%% of the whole per hour and only between depots joined by your own land. "
+                 "`depot P<id> 0` empties one and closes it (you always keep at least one). Every province draws supply from its nearest depot. One depot can push out "
+                 "only so much: its load is the sum over the provinces it serves of 1/(1+%.2f x steps) (harsh land counts half); above %g (in a city %g) everything it serves "
+                 "arrives proportionally slower. Whoever takes a depot takes the share of your treasury kept there. `q depots` shows share, weight, load and output of each."
+                 % (D.DEPOT_COST, D.DEPOT_HOURS, D.DEPOT_SHIFT * 100, g.stock_hop, D.HUB_LOAD, D.HUB_LOAD_CITY))
+        L.append("UNITS MOVE AND FIGHT INDIVIDUALLY. Every province has one key point. Orders name provinces; a unit walks in a "
+                 "straight line from key point to key point and forms up around the one it is sent to (groups take up real room, "
+                 "about %.2f cells per unit, so the front ranks of a big group reach the enemy first)." % D.SLOT)
+        L.append("CAPTURE: a province is yours once one of your units stands at its key point and no fighting unit of any other "
+                 "side is left in the province. Holding the key point is what counts, not the land around it.")
+        L.append("FIRE: each hour a unit fires at up to %d nearest enemies within its range (cells: %s; neighbouring key points are "
+                 "about %.1f cells apart). A unit under move orders is ADVANCING: it halts while it has a target, fires with atk, and "
+                 "has no cover. A unit standing its ground fires with max(atk, %.1f x dfn), and incoming fire is divided by the terrain "
+                 "defence and, on its own soil, by the fort. Artillery outranges everything: it can hit a key point from the next "
+                 "province, and only other artillery or an advance can answer it. Units below strength %d fall back and do not fire."
+                 % (D.TARGETS, " ".join("%s %g" % kv for kv in D.RANGE.items()), D.SPAN, D.HOLD_FIRE, D.RETREAT_AT))
+        L.append("Units near the enemy (roughly within two provinces) do not recover strength; pull them back to refit.")
+        L.append("TERRAIN move-hours(speed 1)/defence-mult/elevation: " + ", ".join(
+            "%s %d/%.2f/%d" % (k, v["cost"], v["dfn"], v["elev"]) for k, v in D.TERRAIN.items() if k != "water") +
+            ". Plain and forest lie at height 0 or 1 (lowland or upland), so there are four height levels 0-3. city +0.25 defence. "
+            "Attack power is x%.2f per level when attacking downhill and x%.2f per level uphill. arm is slow and weak (x0.6) in forest/hill/mountain." % (D.DOWNHILL, D.UPHILL))
+        L.append("SUPPLY: units in your supplied territory regain strength; units with no supplied friendly province "
+                 "next to them lose strength and fight at 70%. Upkeep is paid from income.")
+        L.append("EXPLORATION: the map itself is hidden. You know a province (terrain, height, yield, manpower, neighbours) only "
+                 "after one of your units or provinces has seen it once; orders and routes can only use explored land plus one step beyond it.")
+        L.append("FOG: you see your provinces, their neighbours, and what your units see (sight + elevation of the province "
+                 "they stand on; higher ground blocks the view beyond it). Enemy strength is exact only next to your units "
+                 "or under a rec's eyes; otherwise it is a rough estimate marked ~. Enemy capitals and depots are unknown until seen.")
+        L.append("FRONTS: units holding their own land do not open fire on enemy units that merely stand on theirs: a front where nobody advances is quiet "
+                 "(no losses, readiness recovers at the contact rate). Fire starts when units advance (have a route) or stand on land that is not theirs; units that "
+                 "`prepare` an attack on a province also shell it if it is in their range (and can be shelled back by whoever reaches them); and "
+                 "everyone in range joins a battle once it is on, including artillery standing behind either side. When a province falls, the loser's units in "
+                 "A province assaulted from two directions keeps only %d%% of its terrain and fort cover, from three or more %d%%. "
+                 "the neighbouring provinces lose %g morale (their flank is open); units cut off from supply lose %g strength per hour and surrender when "
+                 "their morale is gone. Whoever takes a faction's last depot also takes %d%% of its manpower pool."
+                 % (round(D.FLANK_COVER[0] * 100), round(D.FLANK_COVER[1] * 100), D.MOR_FLANK, D.ATTRITION, round(D.LOOT_MP * 100)))
+        L.append("WIN: a faction that has lost its last depot is out; all its land passes to whoever took that depot and its units disband. "
+                 "The last faction standing wins. At tick %d the highest score (territory yield, then army) wins." % g.max_ticks)
+        L.append("MANPOWER: provinces also yield manpower (cities most). Raising a unit and replacing its losses both draw "
+                 "on the manpower pool; with no manpower units do not recover.")
+        L.append("FORTS: units told to `fortify` dig in where they stand (own province). Levels 1 trench, 2 bunkers, 3 fortress: "
+                 "each level divides damage taken there by a further +25%% and adds 10%% return fire. Level L takes L x %d unit-hours "
+                 "(eng digs 4x faster). art ignores 60%% of a fort, eng 40%%, arm 25%%. A captured fort loses half its levels." % D.FORT_HOURS)
+        L.append("SUPPLIES: every supplied province stores supplies (cap %d, city %d). Inflow per hour is %.0f/(1+%.2f x provinces "
+                 "from the nearest depot of yours, times that depot's output), so fronts far from any depot fill slowly. A unit burns %.2f/h idle, %.2f in contact, %.2f defending an "
+                 "assault and %.2f assaulting, from the province it stands in (or an adjacent own province when on foreign soil). "
+                 "With the stock empty it attacks at half power and loses readiness. Captured provinces keep 25%% of their stock."
+                 % (D.STOCK_CAP, D.STOCK_CAP_CITY, D.STOCK_FLOW, g.stock_hop, D.USE_IDLE, D.USE_CONTACT, D.USE_DEFEND, D.USE_ASSAULT))
+        L.append("READINESS 0-100 per unit: +1/h resting, +%g/h in contact, -0.5/h marching, -1.5/h assaulting, -0.6/h defending. "
+                 "Attack power is x(0.4+0.6*r/100), defence x(0.7+0.3*r/100). New units start at %d." % (D.RDY_CONTACT, D.RDY_NEW))
+        L.append("PREPARED ATTACK: `prepare <sel> P<target>` makes units next to the target plan the attack: +1%% attack per hour "
+                 "of waiting up to +%d%% (+%d%% if a rec of yours is next to the target). The bonus applies when they `move` into "
+                 "that target, shrinks 1%%/h while assaulting, and is lost if they are sent anywhere else." % (D.PLAN_MAX, D.PLAN_MAX_EXACT))
+        L.append("EVERY UNIT HAS ITS OWN STATE. EXPERIENCE 0-100 (%s, 20 points each): fire power x(%.2f+%.2f*xp/100) and damage taken "
+                 "/(%.2f+%.2f*xp/100). Gained by fighting (+%.2f/h assaulting, +%.2f/h defending, slower near the top, +%g for destroying a unit) "
+                 "and slowly by drill at home (up to %d). Replacements arrive green (xp %d), so rebuilding a mauled veteran unit dilutes it. "
+                 "New units start at %d (mil %d)." % ("/".join(D.XP_LEVELS), D.XP_ATK0, D.XP_ATK, D.XP_DFN0, D.XP_DFN, D.XP_ASSAULT, D.XP_DEFEND,
+                                                     D.XP_KILL, D.XP_TRAIN_CAP, D.XP_REPL, p.stats["inf"]["xp0"], p.stats["mil"]["xp0"]))
+        L.append("MORALE 0-100 (new units %d): falls with losses (%.1f per strength point, up to 40%% less for veterans), -%g when a friendly unit "
+                 "is destroyed in the same province, -%.1f/h cut off from supply, -%.1f/h with an empty depot; rises +%.1f/h resting, +%g for "
+                 "destroying a unit, +%g for taking an enemy province. Fire power x(0.75+0.25*morale/100). Below %d a unit breaks and "
+                 "runs even at high strength (it rallies in the rear at %d); surrounded, unsupplied and below %d it surrenders."
+                 % (D.MOR_NEW, D.MOR_DMG, D.MOR_SHOCK, D.MOR_CUT, D.MOR_DRY, D.MOR_REST, D.MOR_KILL, D.MOR_WIN, D.MOR_BREAK, D.MOR_RALLY, D.MOR_SURRENDER))
+        L.append("SUPPRESSION 0-100: incoming fire pins a unit (+%g per strength point lost, artillery x%.1f), halving each hour; "
+                 "fire power x(1-0.5*suppression/100)." % (D.SUP_K, D.SUP_ART))
+        L.append("FORMATIONS: units you put in a named group (`group <name> <sel>`) build FORMATION EXPERIENCE 0-100 while at least %d of them "
+                 "fight in the same province (+%.2f per hour of combat at full rate). It gives the group's units fire power x(1+%.2f*fxp/100) "
+                 "and %d%% less morale loss at 100. Adding units that were not in the group dilutes it in proportion; scattering the group "
+                 "earns nothing." % (D.FORM_MIN, D.FORM_GAIN, D.FORM_ATK, int(D.FORM_MOR * 100)))
+        L.append("RESOURCES: six kinds. res (general supplies and money) comes from every supplied province and pays upkeep. The five strategic "
+                 "resources steel, oil, rare, coal and rubber come only from supplied provinces with a deposit (shown on the province: s<n> steel, o<n> oil, "
+                 "r<n> rare, k<n> coal, u<n> rubber per day). Deposits are not spread evenly: they lie in fields, thick in some regions and almost absent "
+                 "in others, so most factions start without some kinds. Units cost res + manpower and, depending on the kind, steel, oil and rare. "
+                 "Engines burn oil every day (%s per unit); with your oil stock at zero those units fire at %d%% and do not regain readiness. "
+                 "Upgrades need strategic resources too, more kinds the higher the level (see UPGRADES). What you lack you can only get by "
+                 "trade (`offer .. trade`, `offer .. supply`), as a gift, or by holding land that has it."
+                 % (", ".join("%s %g" % kv for kv in D.FUEL.items()), round(D.FUEL_OUT * 100)))
+        L.append("SEASONS AND CLIMATE: a year is %d days (spring, summer, autumn, winter, %d days each; the war starts in spring; south of the equator the "
+                 "seasons are reversed). In winter the land beyond latitude %g freezes, and so do the highest mountains beyond 25; tundra is frozen in every season but summer. "
+                 "On frozen ground moving takes x%.1f hours, supplies arrive at x%.1f, no supply crosses a sea link into or out of it, and a unit that is not on "
+                 "its own supplied land loses %.2f strength per hour (x%.2f for factions whose capital lies beyond latitude %g: they know winter). Forest within "
+                 "latitude %g is jungle: units of factions from outside the tropics (capital beyond %g) lose %.2f strength per hour there when off their own "
+                 "supplied land (less with medicine upgrades). A sea link counts as %d steps for supply. `q env` shows the season, what is frozen in your land now and what will freeze."
+                 % (4 * D.SEASON_DAYS, D.SEASON_DAYS, D.COLD_LAT, D.COLD_MOVE, D.COLD_FLOW, D.FROST, D.HARDY, D.HARDY_LAT, D.JUNGLE_LAT, D.TROPIC_LAT, D.FEVER, D.SEA_HOPS))
+        L.append("ARMOUR: some units are armoured (hard 0-1). Fire at a target is x(1 + hard x (ap - 1)), ap being the firing unit's "
+                 "anti-armour value: soft weapons (ap 0.4-0.8) do little to tanks, anti-tank guns (ap 2.5) tear them open.")
+        L.append("UPGRADES: `research <line>` starts the next level of a line (up to %d levels per line, %d projects at once, level L takes "
+                 "L x %d h and costs L x the amounts below: res always, plus the first of the listed strategic resources at level 1, the first two at level 2 and all three at level 3). Lines: for every unit type <type>.weapons (attack; %s), <type>.protection "
+                 "(defence; %s), <type>.mobility (speed; %s); and general lines %s. NOBODY KNOWS IN ADVANCE WHETHER A LINE LEADS ANYWHERE. "
+                 "For your faction, in this war, each line secretly goes 0 to %d levels deep, and each level that exists is worth a "
+                 "different, unknown amount (roughly +%d%% to +%d%% of the thing improved). When a project finishes you are told the "
+                 "result: a BREAKTHROUGH with its exact effect, or a DEAD END (the resources are gone and that line is closed for good). "
+                 "A breakthrough on one level says nothing certain about the next. Other factions' results are different from yours and you cannot see them. "
+                 "A unit-type breakthrough creates a new model (mark) of that type: units recruited from then on are the new model, but units "
+                 "already in the field KEEP THEIR OLD VALUES until you pay to re-equip them: `refit <sel>` costs %d%% of the type's price per unit "
+                 "(res and special resources, no manpower), needs the unit out of combat on your own supplied land, and takes %d readiness off it."
+                 % (D.TECH_LEVELS, D.TECH_SLOTS, D.TECH_HOURS, _need(D.TECH_UNIT["weapons"]), _need(D.TECH_UNIT["protection"]),
+                    _need(D.TECH_UNIT["mobility"]), "; ".join("%s (%s; %s)" % (k, v["what"], _need(v)) for k, v in D.TECH_GENERAL.items()),
+                    D.TECH_LEVELS, round(D.TECH_SIZE[0] * 100), round(D.TECH_SIZE[1] * 100), round(D.REFIT_COST * 100), D.REFIT_RDY))
+        L.append("DIPLOMACY: you can deal with any faction you have come across (seen its land or units, or received something from it). "
+                 "`say <faction> <text>` sends a letter (max %d characters, %d a day per faction). `give <faction> <n> <res|mp|steel|oil|rare|coal|rubber>` hands over resources, no strings attached. `offer <faction> supply <n> <what> .. for <n> <what> .. [hours]` proposes a STANDING delivery carried out every day until it runs out, one side cannot pay, or either side stops it with `cancel <id>` (everyone who knows the one who cut it off hears of it). A trade may also name provinces (`P<id>`) on either side: land can be sold, bought, or handed over as the price of peace; a province with a depot cannot be handed over, and when land changes hands the two sides get a %d h truce unless they already have a pact. `offer <faction> alliance [hours]` is a pact in which the two sides also see everything the other sees. Nothing obliges an ally to fight for you. "
+                 "`offer <faction> trade <n> <what> .. for <n> <what> ..` proposes a one-off swap; `offer <faction> pact [hours]` proposes a pact for that many hours, or with no hours one that lasts until somebody breaks it; a dated pact can be offered again in its last %d h. "
+                 "The other side answers with `accept <offer id>` or `reject <offer id>`; an unanswered offer lapses after %d h. "
+                 "While a pact holds, the two sides' units do not fire at each other, cannot take each other's provinces and cannot prepare attacks on them (they may walk through). "
+                 "`break <faction>` ends a pact: fighting can resume %d h later, the partner is told at once, and every faction that knows you hears that you broke it. "
+                 "Nothing forces anyone to keep a promise made in a letter. You see only your own dealings."
+                 % (D.MAIL_LEN, D.MAIL_PER_DAY, D.TRUCE_HOURS, D.PACT_RENEW, D.OFFER_HOURS, D.PACT_NOTICE))
+        L.append("UNITS code atk/dfn speed sight range cost-res/manpower/hours [+steel/oil/rare] upkeep-per-day [hard] ap  notes")
+        for c in CODES:
+            s = p.stats[c]
+            L.append(" %s %g/%g v%g s%d r%g %d/%d/%d%s u%g%s ap%g  %s" % (
+                c, s["atk"], s["dfn"], s["spd"], s["sight"], s["range"], s["cost"], s["mp"], s["time"],
+                " +%d/%d/%d" % (s["steel"], s["oil"], s["rare"]) if s["steel"] or s["oil"] or s["rare"] else "", s["upkeep"],
+                " hard%g" % s["hard"] if s["hard"] else "", s["ap"], D.NOTES[c]))
+        L.append("Strength 0-100 scales both attack and defence. Below %d a unit breaks off or retreats." % D.RETREAT_AT)
+        L.append("PROVINCES id terrain(p plain f forest h hill m mountain)+height yield/manpower [c = city] [s<n> o<n> r<n> = steel, oil, rare deposit per day] : neighbours. Water is impassable and not listed.")
+        L.append("(you only know the land you have seen. Listed here: what you can see at the start. Everything else is unexplored until a unit "
+                 "of yours sees it; 'q near P<id> [steps]' lists explored land around a province in this format. Scouts (rec) are the cheap, fast way to look.)")
+        for i in sorted(p.explored):
+            if g.provs[i].terrain != "water": L.append(self._prov_row(i))
+        L.append("Your capital: P%d (your only depot at the start)." % p.capital)
+        L.append("OBSERVATION LINES")
+        L.append(" t<tick> res<bank>+<net per day> mp<manpower>+<per day> steel<bank>+<per day> oil<..>+<..> rare<..>+<..> own<provinces> units<n>")
+        L.append(" O <your province ids>          K p<player> <province ids last known to be theirs> [cap P<id>] | ...   (full observation only;")
+        L.append("                                  afterwards changes arrive as 'took' / 'lost province' events)")
+        L.append(" F front order: <n> units         units currently under the automatic front order")
+        L.append(" U P<prov> <n>u <avg strength>% r<avg readiness> x<avg experience> m<avg morale> st<supplies here> [prep>P<target> <n>u +<pct>] [atk>P<target> <n>u] [dry] [nosup] [f<fort>]   your units in a border or active province")
+        L.append(" U rear <n>u in <k> provinces     everything else (ask 'q prov <id>' for composition)")
+        L.append(" E P<prov> [p<owner>] <n>u s<total strength>  or  E P<prov> [p<owner>] ~<n>u s~<estimate>   enemy units you can see (f = their fort level)")
+        L.append(" R training <type×n..>            units being recruited")
+        L.append(" T research <line> L<level> <hours left>h | ...      projects under way (results arrive as events: BREAKTHROUGH / DEAD END);")
+        L.append("   'old models: inf 40 ..' = units of yours still on an earlier model of their type (see refit)")
+        L.append(" D pacts: <faction>[(ends t<hour>)] .. | offers to you: #<id> <faction>: <terms>; .. | your offers: .. | letters: the last three received")
+        L.append(" X <tick> <event> | ...             took lostprov battle retreat broke lost kill ready cut nosupply intel fort tech surrender")
+        L.append(" Delta updates repeat only changed lines; '-U P<id> P<id>' / '-E P<id>' lists lines that are gone.")
+        L.append("COMMANDS (one per line)")
+        L.append(" move <sel> P<id>        advance to that province's key point by the fastest route, fighting whatever comes within range")
+        L.append(" hold <sel>              stop and defend")
+        L.append(" prepare <sel> P<id>     plan an attack on an adjacent province (see PREPARED ATTACK); then 'move <sel> P<id>' to launch")
+        L.append(" fortify <sel>           dig in where they stand (own province); a later move/hold stops the digging")
+        L.append(" front <sel>             standing order: spread along your border, heavier where more enemy is seen, dig in, and keep")
+        L.append("                         re-spreading as the border moves; units under 40 strength rotate to the rear until 85. A later move/hold takes a unit off the front.")
+        L.append(" expand <sel> [P<id>]    standing order: keep taking free neutral provinces you have explored, one after another, away from")
+        L.append("                         enemy units: the nearest one, or with P<id> the reachable one closest to the province you picked.")
+        L.append("                         When no neutral land is in reach the unit joins the front order. Scouts (rec) cannot take land.")
+        L.append(" explore <sel>           standing order: go to the nearest province you have never seen, look, go on to the next; turns away")
+        L.append("                         from enemy units; ends when nothing unexplored is in reach. Any unit can do it; rec is the fast one.")
+        L.append(" recruit <type> [n] [P<city>]     default city: capital")
+        L.append(" depot P<id> [weight]    open a depot there, or set the weight of one you have (0 = empty and close it); see DEPOTS")
+        L.append(" research <line>         start the next level of an upgrade line (see UPGRADES); 'q tech' lists every line with what you know about it")
+        L.append(" say <faction> <text> | give <faction> <n> <what> | offer <faction> pact|alliance [hours] | offer <faction> trade <n> <what>|P<id> .. for ..")
+        L.append(" offer <faction> supply <n> <what> .. for <n> <what> .. [hours] | cancel <delivery id>      'q powers': what you know of every faction you met; 'q env': season and climate")
+        L.append(" accept <offer id> | reject <offer id> | break <faction>        see DIPLOMACY; 'q dip' shows your dealings")
+        L.append(" refit <sel>             re-equip those units to their type's current model (see UPGRADES); units already current are skipped")
+        L.append(" group <name> <sel>      name a formation; 'group a + <sel>' adds")
+        L.append(" trial <hours> <name> [<name>..]   staff wargame: play up to 4 strategies forward (6-240 h) in a private copy built only from")
+        L.append("                         what you currently know, and compare the forecasts. Names: 'current' (your running policy), a candidate you")
+        L.append("                         drafted, or a ready-made one: %s. The real game keeps running meanwhile." % " ".join(sorted(f[:-3] for f in __import__("os").listdir(__import__("os").path.join(__import__("os").path.dirname(__import__("os").path.abspath(__file__)), "..", "policies")) if f.endswith(".py"))))
+        L.append(" adopt <name>            make that strategy your standing policy from now on")
+        L.append(" q front | q prov <id> | q path <from> <to> | q unit <id> | q near P<id> [steps] | q map | q enemy | q tech [prefix] | q dip | q army [0|1|2]")
+        L.append("   q army: the condition of your own army and its supply, as much or as little as you ask for. 0 = totals (mean readiness, share ready (>= 60), spent (< 20),")
+        L.append("   dry, moving, in contact, fighting, unsupplied). 1 = also by unit type, by standing order (front/expand/explore/direct), and the front as a whole")
+        L.append("   (units per border province, stock, inflow against burn per hour, provinces running short). 2 = also one row for every province holding your units.")
+        L.append(" <sel> = unit ids '3,5-8' | group name | unit type | all | @P<id> (your units in that province); join with ','; 'old' = all your units on an outdated model, 'old:<type>' = those of one type")
+        return "\n".join(L)
+
+    def known_path(self, a, b):
+        """Route using only land this player has explored (the destination may be the first unexplored step)."""
+        g = self.g; ex = self.p.explored
+        if a not in ex or (b not in ex and not any(c in ex for c in g.provs[b].nbrs)): return None
+        r = g.path(a, b)
+        if r and any(i not in ex for i in r[:-1]): r = g._path(a, b, None, None, ex)
+        return r
+
+    def region(self, start, steps):
+        seen = {i: 0 for i in start}; q = list(start); k = 0; provs = self.g.provs
+        while k < len(q):
+            a = q[k]; k += 1
+            if seen[a] >= steps: continue
+            for b in provs[a].nbrs:
+                if b not in seen: seen[b] = seen[a] + 1; q.append(b)
+        return seen
+
+    def tech_view(self):
+        """Every upgrade line as this faction knows it: levels done, status, cost and time of the next level. No hidden data."""
+        g = self.g; out = {}
+        for line in g.tech_lines():
+            lv, st = g.tech_status(self.pid, line)
+            out[line] = dict(level=lv, status=st, cost=g.tech_cost(line, lv + 1) if st == "open" else None, hours=D.TECH_HOURS * (lv + 1) if st == "open" else 0)
+        return out
+
+    def _prov_row(self, i):
+        pr = self.g.provs[i]
+        return "%d %s%s%d %d/%d%s%s:%s" % (pr.id, pr.terrain[0], pr.biome[:1], pr.elev, pr.y, pr.mp, "c" if pr.city else "",
+                                         "".join(" %s%d" % (D.DEP_CODE[k], getattr(pr, k)) for k in D.STRAT if getattr(pr, k)),
+                                         ",".join(("~%d" % b if b in pr.sea else str(b)) for b in pr.nbrs))
+
+    def _near_cap(self):
+        kc = self.p.known_caps
+        if not kc: return None
+        if len(kc) == 1: return next(iter(kc.values()))
+        pc = self.g.provs[self.p.capital]
+        return min(kc.values(), key=lambda c: (self.g.provs[c].cx - pc.cx) ** 2 + (self.g.provs[c].cy - pc.cy) ** 2)
+
+    # ============================================================ observation
+    def _lines(self):
+        g, p, pid = self.g, self.p, self.pid; L = {}
+        mine = [u for u in g.punits[pid].values()]
+        own = [i for i in range(g.n) if g.owner[i] == pid]
+        L["H"] = "t%d res%d%+d mp%d%+d steel%d%+d oil%d%+d rare%d%+d coal%d%+d rubber%d%+d own%d units%d %s%s" % (
+            g.tick, p.res, round(p.income - p.upkeep), p.mp, round(p.mp_income), p.bank["steel"], round(p.inc["steel"]), p.bank["oil"], round(p.inc["oil"] - p.fuel),
+            p.bank["rare"], round(p.inc["rare"]), p.bank["coal"], round(p.inc["coal"]), p.bank["rubber"], round(p.inc["rubber"]), len(own), len(mine),
+            D.SEASONS[g.season_at(g.tick, g.provs[p.capital].lat)], " NO-FUEL" if p.nofuel else "")
+        old = {}
+        for u in g.punits[self.pid].values():
+            if u.st is not p.stats[u.type]: old[u.type] = old.get(u.type, 0) + 1
+        if p.research or old:
+            L["T"] = "T research " + (" | ".join("%s L%d %dh" % (r[0], r[1], r[2]) for r in p.research) or "none") + \
+                     ("  old models: " + " ".join("%s %d" % kv for kv in sorted(old.items())) if old else "")
+        dv = self.dip_view()
+        if dv["pacts"] or dv["offers_in"] or dv["offers_out"] or dv["inbox"] or dv["deals"]:
+            am = lambda d: " ".join((k if k.startswith("P") else "%d %s" % (v, k)) for k, v in sorted(d.items())) or "nothing"
+            ot = lambda o: ("%s %s" % (o["kind"], "%dh" % o["hours"] if o["hours"] else "open-ended")) if o["kind"] in ("pact", "alliance") else "%s they give %s you give %s" % (
+                "daily supply" if o["kind"] == "supply" else "trade", am(o["they_give"]), am(o["you_give"]))
+            L["D"] = "D pacts: %s | offers to you: %s | your offers: %s | letters: %s" % (
+                (" ".join("%s%s%s" % (k, "" if v["kind"] == "pact" else "[%s]" % v["kind"], "(ends t%d)" % v["ends"] if v["ends"] is not None else "") for k, v in sorted(dv["pacts"].items())) or "none") +
+                ("  deliveries: " + "; ".join("#%d %s you give %s get %s" % (d["id"], d["with"], am(d["you_give"]), am(d["they_give"])) for d in dv["deals"]) if dv["deals"] else ""),
+                "; ".join("#%d %s: %s" % (o["id"], o["frm"], ot(o)) for o in dv["offers_in"]) or "none",
+                "; ".join("#%d to %s: %s" % (o["id"], o["to"], ot(o)) for o in dv["offers_out"]) or "none",
+                " / ".join("t%d %s: %s" % (m["t"], m["frm"], m["text"]) for m in dv["inbox"][-3:]) or "none")
+        L["O"] = "O " + _ids(own)
+        fr = [i for i in self.front if i in g.units]
+        ex = sum(1 for i in self.expand if i in g.units)
+        if fr or ex: L["F"] = "F front order: %d units" % len(fr) + (", expand order: %d" % ex if ex else "")
+        ek = {}
+        for i, o in p.known_owner.items():
+            if o >= 0 and o != pid: ek.setdefault(o, []).append(i)
+        if ek: L["K"] = "K " + " | ".join("p%d %s%s" % (o, _ids(ek[o]), " cap P%d" % p.known_caps[o] if o in p.known_caps else "") for o in sorted(ek))
+        # Units are reported per province, and only where it matters: border provinces, battles and marches you
+        # ordered yourself. Everything else collapses into one 'rear' line, so the text stays small with 200 units.
+        bd = self.border(); byp = {}
+        for u in mine: byp.setdefault(u.prov, []).append(u)
+        rear_n = rear_p = 0
+        for prov in sorted(byp):
+            us = byp[prov]
+            hot = prov in bd or any(u.fighting or not u.supplied for u in us)
+            if not hot: rear_n += len(us); rear_p += 1; continue
+            t = "U P%d %du %d%% r%d x%d m%d st%d" % (prov, len(us), math.ceil(sum(u.str for u in us) / len(us) / 20) * 20,
+                                              int(sum(u.rdy for u in us) / len(us) / 25) * 25, int(sum(u.xp for u in us) / len(us) / 20) * 20,
+                                              int(sum(u.mor for u in us) / len(us) / 20) * 20, int(g.stock[prov] / 50) * 50)
+            pl = {}
+            for u in us:
+                if u.plan_t >= 0 and u.fighting != 1: pl.setdefault(u.plan_t, []).append(u.plan_b)
+            for k in sorted(pl): t += " prep>P%d %du +%d" % (k, len(pl[k]), int(sum(pl[k]) / len(pl[k]) / 10) * 10)
+            mv = {}
+            for u in us:
+                if u.path and u.fighting == 1:
+                    k = "atk>P%d" % u.path[0]; mv[k] = mv.get(k, 0) + 1
+            for k in sorted(mv): t += " %s %du" % (k, mv[k])
+            if any(u.dry for u in us): t += " dry"
+            if any(not u.supplied for u in us): t += " nosup"
+            if g.fort_level(prov): t += " f%d" % g.fort_level(prov)
+            L["U%d" % prov] = t
+        if rear_n: L["Ur"] = "U rear %du in %d provinces" % (rear_n, rear_p)
+        for i in sorted(p.visible):
+            est = g.estimate(pid, i)
+            if not est or not est[3]: continue
+            lvl, c, st, n = est
+            sb = 50 if st <= 50 else int(round(st / 100.0)) * 100
+            who = "p%d " % next(u.owner for u in g.pos[i] if u.owner != pid) if self.multi else ""
+            L["E%d" % i] = (("E P%d %s%du s%d" % (i, who, n, sb)) if lvl == 2 else ("E P%d %s~%du s~%d" % (i, who, n, sb))) + \
+                (" f%d" % g.fort_level(i) if g.fort_level(i) else "")
+        if p.queue:
+            c = {}
+            for q in p.queue: c[q[0]] = c.get(q[0], 0) + 1
+            L["R"] = "R training " + _counts(c)
+        return L
+
+    def _events(self):
+        ev = self.p.events[self._ev:]; self._ev = len(self.p.events)
+        if not ev: return None
+        parts = []; took = []; lostp = []; agg = {}
+        for (t, kind, text) in ev:
+            if kind == "took": took.append(text)
+            elif kind == "lostprov": lostp.append(text)
+            elif kind in ("retreat", "broke", "nosupply", "fort"): agg.setdefault("n", {}); agg["n"][kind] = agg["n"].get(kind, 0) + 1
+            elif kind in ("kill", "lost", "ready"):
+                a = agg.setdefault(kind, {}); k = text.split("#")[0].split(" ")[0]; a[k] = a.get(k, 0) + 1
+            else: parts.append("%d %s" % (t, text))
+        if took: parts.append("took " + ",".join(took))
+        if lostp: parts.append("lost province " + ",".join(lostp))
+        if "n" in agg: parts.append(" ".join("%s×%d" % kv for kv in agg["n"].items()))
+        for kind in ("ready", "lost", "kill"):
+            if kind in agg: parts.append("%s %s" % ({"lost": "lost unit"}.get(kind, kind), " ".join("%s×%d" % kv for kv in agg[kind].items())))
+        return "X " + " | ".join(parts)
+
+    def pending_events(self, kinds=("battle", "lostprov", "cut", "retreat", "lost", "intel", "nosupply", "tech", "mail", "gift", "offer", "pact", "news")):
+        return sum(1 for (t, k, x) in self.p.events[self._ev:] if k in kinds)
+
+    def obs(self, mode="delta"):
+        L = self._lines(); last = self._last; out = [L["H"]]
+        if mode == "full" or not last:
+            out += [v for k, v in L.items() if k != "H"]
+        else:
+            out += [v for k, v in L.items() if k not in ("H", "O", "K") and last.get(k) != v]   # O/K changes arrive as events
+            gone = {"U": [], "E": []}
+            for k in last:
+                if k not in L and k[0] in "UE" and k != "Ur": gone[k[0]].append(k[1:])
+            out += ["-%s %s" % (c, " ".join("P" + x for x in v)) for c, v in gone.items() if v]
+            if "R" in last and "R" not in L: out.append("R none")
+        ev = self._events()
+        if ev: out.append(ev)
+        if self.g.over:
+            out.append("GAME OVER: " + ("draw" if self.g.winner is None else ("you win" if self.g.winner == self.pid else "you lose")))
+        self._last = L
+        return "\n".join(out)
+
+    def obs_json(self):
+        g, p, pid = self.g, self.p, self.pid
+        return dict(tick=g.tick, manpower=round(p.mp, 1), manpower_per_day=p.mp_income, resources=round(p.res, 1), steel=round(p.bank["steel"]), oil=round(p.bank["oil"]), rare=round(p.bank["rare"]),
+                    research=[list(r) for r in p.research], tech=dict(p.tech), dead_ends=sorted(p.dead), diplomacy=self.dip_view(), income_per_day=p.income, upkeep_per_day=p.upkeep, capital=p.capital,
+                    provinces=[dict(id=i, owner=("me" if p.known_owner.get(i) == pid else "neutral" if p.known_owner.get(i, -1) < 0 else "enemy"), visible=i in p.visible, supplied=i in p.supplied,
+                                    terrain=g.provs[i].terrain, city=g.provs[i].city, manpower=g.provs[i].mp,
+                                    fort=p.known_fort.get(i, 0), **{"yield": g.provs[i].y})
+                               for i in sorted(p.explored) if g.provs[i].terrain != "water"],
+                    units=[dict(id=u.id, type=u.type, province=u.prov, strength=round(u.str, 1), path=list(u.path),
+                                progress=round(u.prog, 2), fighting=bool(u.fighting), supplied=u.supplied, group=u.group)
+                           for u in g.punits[pid].values()],
+                    enemy=[dict(province=i, exact=e[0] == 2, types=e[1], strength=e[2], count=e[3])
+                           for i in sorted(p.visible) for e in [g.estimate(pid, i)] if e and e[3]],
+                    recruiting=[dict(type=q[0], province=q[1], hours_left=q[2]) for q in p.queue])
+
+    # ============================================================ commands
+    def _fac(self, tok):
+        t = tok.lower().rstrip(":,")
+        for q in self.g.players:
+            if q.faction == t or t == "f%d" % q.id: return q.id
+        raise CmdError("unknown faction '%s'" % tok)
+
+    def _amounts(self, toks):
+        d = {}
+        while toks:
+            if len(toks) >= 2 and toks[0].isdigit() and toks[1].lower() in D.GIVE: d[toks[1].lower()] = d.get(toks[1].lower(), 0) + int(toks[0]); del toks[:2]
+            elif toks[0][:1] in "Pp" and toks[0][1:].isdigit(): d["P" + toks[0][1:]] = 1; del toks[:1]
+            else: break
+        return d
+
+    def dip_view(self):
+        """Everything this faction knows about its dealings: who it has met, pacts, open offers both ways, letters."""
+        g, pid = self.g, self.pid; name = lambda i: g.players[i].faction
+        pacts = {}
+        for (a, b), pc in g.pacts.items():
+            if pid in (a, b):
+                end = [x for x in (pc["ends"], pc["until"]) if x is not None]
+                pacts[name(b if a == pid else a)] = dict(since=pc["since"], ends=min(end) if end else None, broken_by=name(pc["by"]) if pc["by"] is not None else None,
+                                                         kind="alliance" if pc.get("ally") else "truce" if pc.get("truce") else "pact")
+        f = lambda o, mine: dict(id=o["id"], kind=o["kind"], hours=o["hours"], lapses=o["t"] + D.OFFER_HOURS,
+                                 they_give=dict(o["want"] if mine else o["give"]), you_give=dict(o["give"] if mine else o["want"]), **({"to": name(o["to"])} if mine else {"frm": name(o["frm"])}))
+        deals = [dict(id=d["id"], **{"with": name(d["b"] if d["a"] == pid else d["a"])}, you_give=dict(d["give"] if d["a"] == pid else d["want"]),
+                      they_give=dict(d["want"] if d["a"] == pid else d["give"]), since=d["since"], until=d["until"]) for d in g.deals.values() if pid in (d["a"], d["b"])]
+        return dict(met=sorted(name(i) for i in g.met(pid)), pacts=pacts, deals=deals,
+                    offers_in=[f(o, False) for o in g.offers.values() if o["to"] == pid], offers_out=[f(o, True) for o in g.offers.values() if o["frm"] == pid],
+                    inbox=[dict(t=m["t"], frm=name(m["frm"]), text=m["text"]) for m in self.p.mail[-20:]])
+
+    def powers_view(self):
+        """What this faction can tell about every faction it has met (and itself) from the land it has explored: how much land and how many
+        cities it knows to be theirs and what the deposits on that land yield per day. Nothing here is beyond the fog."""
+        g, p = self.g, self.p; out = {}; acc = {}
+        for i, o in p.known_owner.items():
+            if o < 0 or i not in p.explored: continue
+            pr = g.provs[i]; a = acc.setdefault(o, dict(land=0, cities=0, deposits=dict.fromkeys(D.STRAT, 0)))
+            a["land"] += 1; a["cities"] += 1 if pr.city else 0
+            for k in D.STRAT: a["deposits"][k] += getattr(pr, k)
+        for o in [p.id] + sorted(g.met(p.id)):
+            a = acc.get(o, dict(land=0, cities=0, deposits=dict.fromkeys(D.STRAT, 0))); pc = g.pacts.get((min(o, p.id), max(o, p.id)))
+            a["relation"] = "self" if o == p.id else "none" if pc is None else "alliance" if pc.get("ally") else "truce" if pc.get("truce") else "pact"
+            a["deliveries"] = sum(1 for d in g.deals.values() if {d["a"], d["b"]} == {o, p.id})
+            if o == p.id: a["me"] = True
+            out[g.players[o].faction] = a
+        return out
+
+    def depot_view(self):
+        """Your depots: share of the treasury held, wanted weight, hours until open, provinces served, load / capacity and output factor."""
+        g, p = self.g, self.p; out = {}; served = {}
+        for b, d in g.hub[p.id].items(): served[d] = served.get(d, 0) + 1
+        for d in sorted(p.depots):
+            cap = D.HUB_LOAD_CITY if g.provs[d].city else D.HUB_LOAD
+            out[d] = dict(share=round(p.depots[d], 3), weight=p.depot_want.get(d, 0.0), opens_in=p.depot_build.get(d, 0), serves=served.get(d, 0),
+                          load=round(g.load[p.id].get(d, 0.0), 1), capacity=cap, output=round(g.throttle[p.id].get(d, 1.0), 2), city=bool(g.provs[d].city))
+        return out
+
+    def army_view(self, level=0):
+        """The state of this faction's own army and supply, at the detail asked for.
+        0: one line of totals. 1: also by unit type, by standing order, and the front as a whole. 2: also every province that holds units."""
+        g, p, pid = self.g, self.p, self.pid; us = list(g.punits[pid].values()); n = max(1, len(us)); own = g.owner
+        sh = lambda k: round(k / n, 3)
+        def cond(rows):
+            m = max(1, len(rows))
+            return dict(n=len(rows), rdy=round(sum(u.rdy for u in rows) / m, 1), mor=round(sum(u.mor for u in rows) / m, 1), str=round(sum(u.str for u in rows) / m, 1),
+                        ready=round(sum(1 for u in rows if u.rdy >= 60) / m, 3), dry=round(sum(1 for u in rows if u.dry) / m, 3), moving=round(sum(1 for u in rows if u.path) / m, 3))
+        out = cond(us); out.update(t=g.tick, spent=sh(sum(1 for u in us if u.rdy < 20)), contact=sh(sum(1 for u in us if u.contact)), fighting=sh(sum(1 for u in us if u.fighting)),
+                                   unsupplied=sh(sum(1 for u in us if not u.supplied)), old_models=sum(1 for u in us if u.st is not p.stats[u.type]))
+        if level < 1: return out
+        use = lambda u: D.USE_ASSAULT if u.fighting == 1 else D.USE_DEFEND if u.fighting == 2 else D.USE_CONTACT if u.contact and not u.path else D.USE_IDLE
+        order = lambda u: "front" if u.id in self.front else "expand" if u.id in self.expand else "explore" if u.id in self.explore else "direct"
+        bt = {}; bo = {}; bp = {}
+        for u in us: bt.setdefault(u.type, []).append(u); bo.setdefault(order(u), []).append(u); bp.setdefault(u.prov, []).append(u)
+        out["by_type"] = {k: cond(v) for k, v in sorted(bt.items())}; out["by_order"] = {k: cond(v) for k, v in sorted(bo.items())}
+        hops = g.hops[pid]; rows = []
+        for i, v in sorted(bp.items()):
+            mine = own[i] == pid; border = mine and any(own[b] >= 0 and own[b] != pid for b in g.provs[i].nbrs)
+            inflow = D.STOCK_FLOW * p.mult["flow"] / (1.0 + g.stock_hop * hops[i]) * (0.5 if g.provs[i].biome else 1.0) if mine and i in hops else 0.0
+            c = cond(v); c.update(prov=i, own=mine, border=border, stock=round(g.stock[i], 1) if mine else None, inflow=round(inflow, 2), burn=round(sum(use(u) for u in v), 2),
+                                  hops=hops.get(i) if mine else None, fort=g.fort_level(i) if mine else None)
+            rows.append(c)
+        fr = [r for r in rows if r["border"]]; k = max(1, len(fr))
+        out["front"] = dict(provinces=len(fr), units=sum(r["n"] for r in fr), units_per_province=round(sum(r["n"] for r in fr) / k, 1), rdy=round(sum(r["rdy"] * r["n"] for r in fr) / max(1, sum(r["n"] for r in fr)), 1),
+                            stock_mean=round(sum(r["stock"] for r in fr) / k, 1), stock_empty=sum(1 for r in fr if r["stock"] < 1), inflow_per_h=round(sum(r["inflow"] for r in fr) / k, 2),
+                            burn_per_h=round(sum(r["burn"] for r in fr) / k, 2), short=sum(1 for r in fr if r["burn"] > r["inflow"]))
+        if level >= 2: out["provinces"] = rows
+        return out
+
+    def _prov(self, tok):
+        t = tok.lstrip("Pp")
+        if tok == "capital": return self.p.capital
+        if tok == "enemy":
+            if not self.p.known_caps: raise CmdError("enemy capital not found yet")
+            return self._near_cap()
+        if not t.isdigit() or int(t) >= self.g.n: raise CmdError("bad province '%s'" % tok)
+        i = int(t); ex = self.p.explored
+        if i not in ex and not any(b in ex for b in self.g.provs[i].nbrs): raise CmdError("P%d is unexplored" % i)
+        return i
+
+    def _sel(self, tok):
+        g, pid = self.g, self.pid; ids = []
+        mine = [u for u in g.punits[pid].values()]
+        for part in tok.split(","):
+            part = part.strip().lstrip("#")
+            if not part: continue
+            if part.isdigit(): ids.append(int(part))
+            elif "-" in part and all(x.isdigit() for x in part.split("-", 1)):
+                a, b = part.split("-", 1); ids += list(range(int(a), int(b) + 1))
+            elif part in CODES: ids += [u.id for u in mine if u.type == part]
+            elif part == "all": ids += [u.id for u in mine]
+            elif part == "old": ids += [u.id for u in mine if u.st is not self.p.stats[u.type]]
+            elif part[:4] == "old:" and part[4:] in CODES: ids += [u.id for u in mine if u.type == part[4:] and u.st is not self.p.stats[u.type]]
+            elif part[0] == "@": pv = self._prov(part[1:]); ids += [u.id for u in mine if u.prov == pv]
+            elif part in self.p.groups: ids += list(self.p.groups[part])
+            else: raise CmdError("bad selector '%s'" % part)
+        ids = [i for i in dict.fromkeys(ids) if i in g.units and g.units[i].owner == pid]
+        if not ids: raise CmdError("selector '%s' matches nothing" % tok)
+        return ids
+
+    def act(self, text):
+        ok = 0; out = []; n = 0
+        for raw in text.replace(";", "\n").split("\n"):
+            line = raw.strip().strip("`").strip()
+            if not line or line.startswith(("#", "//")): continue
+            n += 1; self.stats["cmds"] += 1
+            try:
+                r = self._one(line)
+                if r: out.append(r)
+                else: ok += 1
+            except CmdError as ex:
+                self.stats["errors"] += 1; out.append("E%d %s: %s" % (n, line.split()[0], ex))
+            except Exception as ex:
+                self.stats["errors"] += 1; out.append("E%d %s: bad syntax (%s)" % (n, line.split()[0], type(ex).__name__))
+        return "\n".join((["ok %d" % ok] if ok else []) + out) or "no commands"
+
+    def _one(self, line):
+        g, pid = self.g, self.pid
+        toks = line.split(); verb = toks.pop(0).lower()
+        if verb == "q": return self.query(" ".join(toks))
+        if verb in ("move", "attack", "atk"):
+            ids = self._sel(toks.pop(0)); err = g.order_move(pid, ids, self._prov(toks.pop(0)), known=self.p.explored)
+            self.front.difference_update(ids); self.expand.difference_update(ids); self.explore.difference_update(ids)
+        elif verb in ("hold", "stop"):
+            ids = self._sel(toks.pop(0)); err = g.order_hold(pid, ids); self.front.difference_update(ids); self.expand.difference_update(ids); self.explore.difference_update(ids)
+        elif verb in ("prepare", "prep"):
+            ids = self._sel(toks.pop(0)); err = g.order_prepare(pid, ids, self._prov(toks.pop(0))); self.front.difference_update(ids); self.expand.difference_update(ids); self.explore.difference_update(ids)
+        elif verb in ("fortify", "dig"):
+            ids = self._sel(toks.pop(0)); err = g.order_fortify(pid, ids)
+        elif verb == "expand":
+            ids = self._sel(toks.pop(0)); to = self._prov(toks.pop(0)) if toks else None
+            g.order_hold(pid, ids); self.front.difference_update(ids); self.explore.difference_update(ids)
+            sc = [i for i in ids if g.units[i].type == "rec"]; ids = [i for i in ids if g.units[i].type != "rec"]
+            self.expand.update(ids)
+            for i in ids:
+                if to is None: self.expand_to.pop(i, None)
+                else: self.expand_to[i] = to
+            self._run_expand(); err = None
+            if sc:
+                self.explore.update(sc); self._run_explore()
+                if not ids: return "ok (scouts cannot take land: %d rec sent to explore instead)" % len(sc)
+        elif verb == "explore":
+            ids = self._sel(toks.pop(0)); g.order_hold(pid, ids); self.front.difference_update(ids); self.expand.difference_update(ids)
+            self.explore.update(ids); self._run_explore(); err = None
+        elif verb == "front":
+            ids = self._sel(toks.pop(0)); self.expand.difference_update(ids); self.explore.difference_update(ids); self.front.update(ids); self._run_front(); err = None
+        elif verb == "research":
+            err = g.order_research(pid, toks.pop(0))
+        elif verb == "say":
+            to = self._fac(toks.pop(0)); err = g.order_say(pid, to, line.split(None, 2)[2] if len(line.split(None, 2)) > 2 else "")
+        elif verb == "give":
+            to = self._fac(toks.pop(0)); n = int(toks.pop(0)); err = g.order_give(pid, to, toks.pop(0).lower(), n)
+        elif verb == "offer":
+            to = self._fac(toks.pop(0)); kind = toks.pop(0).lower()
+            if kind in ("pact", "alliance"): err, oid = g.order_offer(pid, to, kind, hours=int(toks[0]) if toks and toks[0].isdigit() else 0)
+            elif kind in ("trade", "supply"):
+                give = self._amounts(toks)
+                if toks and toks[0].lower() == "for": toks.pop(0)
+                want = self._amounts(toks)
+                err, oid = g.order_offer(pid, to, kind, give=give, want=want, hours=int(toks[0]) if kind == "supply" and toks and toks[0].isdigit() else 0)
+            else: raise CmdError("offer <faction> pact|alliance [hours] | offer <faction> trade <n> <what>|P<id> .. for <n> <what>|P<id> .. | offer <faction> supply <n> <what> .. for <n> <what> .. [hours]")
+            if not err: return "ok (offer %d sent)" % oid
+        elif verb in ("accept", "reject"):
+            err = g.order_answer(pid, int(toks.pop(0).lstrip("#")), verb == "accept")
+        elif verb == "break":
+            err = g.order_break(pid, self._fac(toks.pop(0)))
+        elif verb == "cancel":
+            err = g.order_cancel(pid, int(toks.pop(0).lstrip("#")))
+        elif verb == "depot":
+            pv = self._prov(toks.pop(0)); err = g.order_depot(pid, pv, float(toks.pop(0)) if toks else 1.0)
+        elif verb == "refit":
+            ids = self._sel(toks.pop(0)); done = 0; err = None; skip = 0
+            for i in sorted(ids):
+                e = g.order_refit(pid, i)
+                if e is None: done += 1
+                elif "already" in e: skip += 1
+                else: err = err or e
+            if done or (skip and not err): return "ok (%d refitted%s%s)" % (done, ", %d already current" % skip if skip else "", "; stopped: " + err if err else "")
+        elif verb == "recruit":
+            code = toks.pop(0); n = 1; prov = None
+            for t in toks:
+                if t.isdigit(): n = int(t)
+                else: prov = self._prov(t)
+            err = None; done = 0
+            for _ in range(n):
+                err = g.order_recruit(pid, code, prov)
+                if err: break
+                done += 1
+            if err and done: err = "%d/%d ordered, then: %s" % (done, n, err)
+        elif verb == "group":
+            name = toks.pop(0); add = False
+            if toks and toks[0] in ("+", "="): add = toks.pop(0) == "+"
+            if not name.isalpha() or name in CODES + ("all",): raise CmdError("bad group name")
+            ids = self._sel(",".join(toks))
+            for s in self.p.groups.values(): s.difference_update(ids)
+            cur = self.p.groups.setdefault(name, set()); old = set(i for i in cur if i in g.units)
+            if not add:
+                for i in cur:
+                    if i in g.units: g.units[i].group = ""
+                cur.clear()
+            cur.intersection_update(g.units.keys()); cur.update(ids)
+            for i in ids: g.units[i].group = name
+            fx = self.p.fxp                                     # newcomers have not fought with this formation: its experience is diluted
+            if name in fx: fx[name] = fx[name] * len(old & cur) / max(1, len(cur))
+            err = None
+        elif verb == "trial":
+            from .wargame import trial
+            hours = int(toks.pop(0)) if toks and toks[0].isdigit() else 48
+            if not toks: raise CmdError("usage: trial <hours> <name> [<name>...]")
+            return trial(self, toks, hours)
+        elif verb == "adopt":
+            src = self.source(toks[0])
+            if src is None: raise CmdError("no such candidate or library policy")
+            r = self.set_policy("main", src[0], src[1])
+            return "adopted %s: %s" % (toks[0], r)
+        else:
+            raise CmdError("unknown command")
+        if err: raise CmdError(err)
+        return None
+
+    # ============================================================ queries
+    def query(self, text):
+        g, p, pid = self.g, self.p, self.pid
+        toks = text.split()
+        if not toks: return "q front|prov|path|unit|map|enemy"
+        k = toks.pop(0)
+        try:
+            if k == "front":
+                out = []
+                for i in range(g.n):
+                    if g.owner[i] != pid: continue
+                    en = [b for b in g.provs[i].nbrs if p.known_owner.get(b, -1) not in (-1, pid)]
+                    ne = [b for b in g.provs[i].nbrs if p.known_owner.get(b, -1) == -1]
+                    if not en and not ne: continue
+                    my = sum(u.str for u in g.pos[i] if u.owner == pid)
+                    s = "P%d(%s y%d) mine s%d" % (i, g.provs[i].terrain, g.provs[i].y, my)
+                    if en:
+                        s += " | enemy " + " ".join("P%d%s" % (b, self._est_str(b)) for b in en)
+                    if ne: s += " | neutral " + " ".join("P%d(y%d)" % (b, g.provs[b].y) for b in ne)
+                    out.append(s)
+                return "front:\n" + "\n".join(out) if out else "front: none"
+            if k == "prov":
+                i = self._prov(toks[0]); pr = g.provs[i]; ko = p.known_owner.get(i)
+                if i not in p.explored: return "P%d: unexplored (send a unit to look)" % i
+                s = "P%d %s elev%d y%d mp%d fort%d%s%s owner=%s %s" % (i, pr.terrain, pr.elev, pr.y, pr.mp, p.known_fort.get(i, 0),
+                                                        " stock%d +%.1f/h" % (g.stock[i], g.stock_flow(pid, i)) if g.owner[i] == pid else "", " city" if pr.city else "",
+                                                        "you" if ko == pid else "neutral" if ko is None or ko < 0 else "enemy P%d" % ko,
+                                                        "visible" if i in p.visible else "not visible")
+                if g.owner[i] == pid: s += " supplied" if i in p.supplied else " CUT OFF"
+                us = [u for u in g.pos[i] if u.owner == pid]; c = {}
+                for u in us: c[u.type] = c.get(u.type, 0) + 1
+                if pr.biome: s += " " + pr.biome
+                if pr.sea: s += " sea links to " + ",".join("P%d" % b for b in pr.sea)
+                if us: s += " | yours: %s s%d xp%d morale%d" % (_counts(c), sum(u.str for u in us), sum(u.xp for u in us) / len(us), sum(u.mor for u in us) / len(us))
+                return s + (" | enemy:" + self._est_str(i) if self._est_str(i) else "")
+            if k == "path":
+                a, b = self._prov(toks[0]), self._prov(toks[1]); path = self.known_path(a, b)
+                if path is None: return "path: no land route"
+                return "path P%d>%s  hours: %s" % (a, ">".join("P%d" % i for i in path), " ".join(
+                    "%s %d" % (c, sum(g.provs[i].cost / p.stats[c]["spd"] * (p.stats[c]["climb"] if g.provs[i].terrain in D.HIGH else 1)
+                                      for i in path)) for c in ("inf", "mot", "art")))
+            if k == "unit":
+                u = g.units.get(int(toks[0].lstrip("#")))
+                if u is None or u.owner != pid: return "unit: not yours"
+                return "%s#%d P%d s%d %s%s%s | %s, xp %d (%s), morale %d, suppression %d, readiness %d, %d h in combat%s%s" % (
+                    u.type, u.id, u.prov, u.str, "path " + ">".join(map(str, u.path)) if u.path else "hold",
+                    " fighting" if u.fighting else "", "" if u.supplied else " nosup", g.state(u), u.xp, D.XP_LEVELS[min(4, int(u.xp // 20))],
+                    u.mor, u.sup, u.rdy, u.hours, ", mark %d of %d" % (u.st["mark"], p.stats[u.type]["mark"]), ", formation %s fxp %d" % (u.group, p.fxp.get(u.group, 0)) if u.group else "")
+            if k == "near":
+                rows = [self._prov_row(i) for i in sorted(self.region([self._prov(toks[0])], int(toks[1]) if len(toks) > 1 else 2)) if i in p.explored and g.provs[i].terrain != "water"]
+                return "\n".join(rows) if rows else "near: nothing explored there"
+            if k == "map":
+                return "map (one char per cell = province id in base 36, ~ water; ids above 35 wrap)\n" + ascii_map(g.map, {i: "?" for i in range(g.n) if i not in p.explored})
+            if k == "army":
+                import json as _j
+                return _j.dumps(self.army_view(int(toks[0]) if toks and toks[0].isdigit() else 0), ensure_ascii=False)
+            if k in ("depots", "depot"):
+                return "\n".join(["DEPOTS prov share weight serves load/capacity output  (new one: %d res, %d h)" % (D.DEPOT_COST, D.DEPOT_HOURS)] +
+                                 ["P%d %d%% w%g serves %d load %.1f/%g output x%.2f%s" % (d, round(v["share"] * 100), v["weight"], v["serves"], v["load"], v["capacity"], v["output"], " (opens in %d h)" % v["opens_in"] if v["opens_in"] else "") for d, v in self.depot_view().items()] +
+                                 ["enemy depots seen: " + (" ".join("P%d(%s)" % (d, self.g.players[o].faction) for d, o in sorted(self.p.known_depots.items())) or "none")])
+            if k == "env":
+                la = g.provs[p.capital].lat; t = g.tick; sd = 24 * D.SEASON_DAYS; own_ = g.owned[self.pid]
+                return "season %s (day %d of %d), next season in %d h; your faction: %s, %s\nfrozen now in your land: %s\nfreezes in winter: %s\njungle you know: %s" % (
+                    D.SEASONS[g.season_at(t, la)], (t % sd) // 24 + 1, D.SEASON_DAYS, sd - t % sd, "winter-hardened" if p.hardy else "not winter-hardened", "tropical" if p.tropic else "not tropical",
+                    _ids(sorted(i for i in own_ if i in g.cold)) or "none", _ids(sorted(i for i in own_ if g.freezes(i, 3))) or "none", _ids(sorted(i for i in p.explored if i in g.jungle)) or "none")
+            if k in ("powers", "power"):
+                rows = ["POWERS as far as you have seen: faction relation land cities deposits/day(steel oil rare coal rubber) on the land you know to be theirs"]
+                for n_, v in self.powers_view().items():
+                    rows.append("%s %s land %d cities %d deposits %s%s" % (n_, v["relation"], v["land"], v["cities"], " ".join("%s %d" % (k_, v["deposits"][k_]) for k_ in D.STRAT), " (you)" if v.get("me") else ""))
+                return "\n".join(rows)
+            if k in ("dip", "diplomacy"):
+                import json as _j
+                return _j.dumps(self.dip_view(), ensure_ascii=False)
+            if k == "tech":
+                rows = []
+                for line, t in self.tech_view().items():
+                    if toks and not line.startswith(toks[0]): continue
+                    rows.append("%s L%d %s%s" % (line, t["level"], t["status"], " next: " + _cost(t["cost"]) + " %dh" % t["hours"] if t["cost"] else ""))
+                return "\n".join(rows + ["results so far: " + ("; ".join(x["text"] for x in p.tech_log) or "none")])
+            if k == "enemy":
+                out = ["P%d%s" % (i, self._est_str(i)) for i in sorted(p.visible) if self._est_str(i)]
+                return "enemy seen: " + (" ".join(out) if out else "none")
+        except CmdError as ex: return "q %s: %s" % (k, ex)
+        except (IndexError, ValueError, KeyError): return "q %s: bad arguments" % k
+        return "q: unknown query '%s'" % k
+
+    def _est_str(self, prov):
+        e = self.g.estimate(self.pid, prov)
+        if not e or not e[3]: return ""
+        return "[%s s%d]" % (_counts(e[1]), e[2]) if e[0] == 2 else "[?×%d s~%d]" % (e[3], e[2])
+
+    # ============================================================ policies (standing-order programs)
+    def set_policy(self, name, code, every=6):
+        """Install python source defining tick(api); it runs inside the engine every `every` hours.
+        Empty code removes it. See PolicyApi for what it can see and do."""
+        if not code or not code.strip():
+            self.policies.pop(name, None); self.sources.pop(name, None); return "policy %s removed" % name
+        bi = __builtins__ if isinstance(__builtins__, dict) else vars(__builtins__)
+        safe = {k: bi[k] for k in ("abs", "all", "any", "bool", "dict", "enumerate", "filter", "float", "int", "len", "list",
+                                   "map", "max", "min", "range", "reversed", "round", "set", "sorted", "str", "sum", "tuple",
+                                   "zip", "isinstance", "print", "next", "iter", "Exception", "ValueError", "KeyError",
+                                   "IndexError", "TypeError", "ZeroDivisionError", "AttributeError", "frozenset", "divmod", "pow")}
+        env = {"__builtins__": safe, "math": math}
+        try: exec(compile(code, "<policy %s>" % name, "exec"), env)
+        except Exception as ex: return "policy error: %s: %s" % (type(ex).__name__, ex)
+        if not callable(env.get("tick")): return "policy error: define tick(api)"
+        self.sources[name] = (code, max(1, int(every)))
+        self.policies[name] = dict(fn=env["tick"], every=max(1, int(every)), mem={}, ms=0.0, calls=0, err=None)
+        return "policy %s installed (every %d h)" % (name, every)
+
+    def set_candidate(self, name, code, every=6):
+        """Store a strategy for trials without running it. `trial` compares candidates; `adopt` installs one."""
+        if not name.replace("_", "").isalnum() or name == "current": return "candidate error: bad name"
+        try: compile(code, "<candidate %s>" % name, "exec")
+        except SyntaxError as ex: return "candidate error: %s" % ex
+        if len(self.candidates) >= 8 and name not in self.candidates: self.candidates.pop(next(iter(self.candidates)))
+        self.candidates[name] = (code, max(1, int(every)))
+        return "candidate %s stored" % name
+
+    def source(self, name):
+        from .wargame import library
+        if name == "current": return self.sources.get("main")
+        if name in self.candidates: return self.candidates[name]
+        code = library(name)
+        return (code, 6) if code else None
+
+    def border(self):
+        """Your provinces that touch enemy land (or, before contact, neutral land) -> weight."""
+        g, p, pid = self.g, self.p, self.pid; en = {}; ne = {}
+        for i in range(g.n):
+            if g.owner[i] != pid: continue
+            w = 0.0; hit = False; neu = False
+            for b in g.provs[i].nbrs:
+                ko = p.known_owner.get(b, -1)
+                if ko >= 0 and ko != pid:
+                    hit = True; e = g.estimate(pid, b)
+                    if e and e[3]: w += e[2] / 100.0
+                elif ko == -1 and g.owner[b] != pid: neu = True
+            if hit: en[i] = 1.0 + w + (1.0 if i == p.capital or g.provs[i].city else 0.0)
+            if neu: ne[i] = 1.0
+        self.neutral_border = sorted(ne)
+        return en or ne
+
+    def _run_expand(self):
+        """Standing order 'expand': each unit walks to a neutral province nobody else is heading for, takes its key
+        point, and goes on to the next. Without a target it is the nearest one; with 'expand <sel> P<id>' it is the
+        reachable one closest to the province the commander picked. It keeps away from provinces where enemy units
+        are seen. When no neutral land is left within reach the unit joins the front order."""
+        g = self.g; pid = self.pid; ko = self.p.known_owner; provs = g.provs; ex = self.p.explored; vis = self.p.visible
+        self.expand = set(i for i in self.expand if i in g.units)
+        if not self.expand: return
+        taken = set(g.units[i].path[-1] for i in self.expand if g.units[i].path)
+        for i in sorted(self.expand):
+            u = g.units[i]
+            if u.path or u.fighting or u.rout: continue
+            if u.str < 40:
+                if g.owner[u.prov] != pid: g._retreat(u)
+                continue
+            to = self.expand_to.get(i); tp = provs[to] if to is not None else None
+            seen = {u.prov}; q = [u.prov]; k = 0; goal = -1; best = None
+            while k < len(q) and k < 400:
+                a = q[k]; k += 1
+                for b in provs[a].nbrs:
+                    if b in seen: continue
+                    seen.add(b); o = ko.get(b, -1) if g.owner[b] != pid else pid
+                    if o == pid: q.append(b)
+                    elif o == -1 and b in ex and provs[b].terrain != "water" and b not in taken and not (b in vis and g.enemy_at(b, pid)) and not any(
+                            ko.get(c, -1) not in (-1, pid) for c in provs[b].nbrs):
+                        if tp is None: goal = b; break
+                        d = (provs[b].cx - tp.cx) ** 2 + (provs[b].cy - tp.cy) ** 2
+                        if best is None or d < best: best = d; goal = b
+                if goal >= 0 and tp is None: break
+            if goal >= 0: taken.add(goal); g.order_move(pid, [i], goal, known=ex)
+            else: self.expand.discard(i); self.expand_to.pop(i, None); self.front.add(i)
+
+    def _run_explore(self):
+        """Standing order 'explore': each unit walks to the nearest province its side has never seen (through land
+        it knows), looks, and goes on. It turns away from provinces where enemy units are seen. When nothing
+        unexplored is in reach the order ends and the unit holds."""
+        g = self.g; pid = self.pid; provs = g.provs; ex = self.p.explored; vis = self.p.visible
+        self.explore = set(i for i in self.explore if i in g.units)
+        if not self.explore: return
+        taken = set(g.units[i].path[-1] for i in self.explore if g.units[i].path)
+        for i in sorted(self.explore):
+            u = g.units[i]
+            if u.rout: continue
+            if u.path:
+                if u.path[-1] in ex or (u.path[0] in vis and g.enemy_at(u.path[0], pid)): g.order_hold(pid, [i])     # already seen from afar, or enemy ahead
+                else: continue
+            seen = {u.prov}; q = [u.prov]; k = 0; goal = -1
+            while k < len(q) and k < 1500 and goal < 0:
+                a = q[k]; k += 1
+                for b in provs[a].nbrs:
+                    if b in seen: continue
+                    seen.add(b)
+                    if b not in ex:
+                        if b not in taken and b not in self.no_go: goal = b; break
+                    elif provs[b].terrain != "water" and not (b in vis and g.enemy_at(b, pid)): q.append(b)
+            if goal < 0: self.explore.discard(i); continue
+            if g.order_move(pid, [i], goal, known=ex): self.no_go.add(goal)        # water or no way in
+            else: taken.add(goal)
+
+    def _run_front(self):
+        """Spread the front-order units along the border, more where more enemy is seen. Units in battle stay."""
+        g = self.g
+        self.front = set(i for i in self.front if i in g.units)
+        if not self.front: return
+        bd = self.border()
+        if not bd: return
+        us = []
+        for i in sorted(self.front):                          # rotation: worn units rest behind the line, then return
+            u = g.units[i]
+            if u.str < 40 and not u.fighting: self.resting.add(i)
+            elif u.str >= 85: self.resting.discard(i)
+            if u.plan_t >= 0: continue
+            if i in self.resting:
+                if u.contact or u.prov in bd:
+                    rear = [b for b in g.provs[u.prov].nbrs if g.owner[b] == self.pid and b not in bd and b in self.p.supplied]
+                    if rear and not u.path: g.order_move(self.pid, [u.id], rear[0], own_only=True)
+                continue
+            us.append(u)
+        if not us: return
+        tot = sum(bd.values()); n = len(us)
+        want = {b: max(1 if n >= len(bd) else 0, int(n * w / tot)) for b, w in bd.items()}
+        have = {b: [] for b in bd}; spare = []
+        for u in us:
+            d = u.path[-1] if u.path else u.prov
+            if d in have and (len(have[d]) < want[d] * 1.5 + 2 or u.fighting):     # a unit in the line stays there: only a clear surplus is moved on
+                have[d].append(u)
+                if not u.path and not u.dig and g.fort_level(d) < D.FORT_MAX and g.owner[d] == self.pid: u.dig = True
+            elif not u.fighting: spare.append(u)
+        need = sorted(((want[b] - len(have[b])) / max(1.0, want[b]), b) for b in bd if len(have[b]) < 0.75 * want[b] or not have[b])
+        need.reverse()
+        P = g.provs
+        for frac, b in need:
+            bx, by = P[b].cx, P[b].cy
+            for _ in range(want[b] - len(have[b])):
+                if not spare: return
+                u = min(spare, key=lambda x: ((P[x.prov].cx - bx) ** 2 + (P[x.prov].cy - by) ** 2, x.id)); spare.remove(u)
+                if u.prov != b: g.order_move(self.pid, [u.id], b, own_only=True)
+                else: g.order_hold(self.pid, [u.id])
+        for u in spare:                       # leftovers: stop wandering once they are on any border province
+            d = u.path[-1] if u.path else u.prov
+            if d not in bd:
+                ux, uy = P[u.prov].cx, P[u.prov].cy
+                b = min(bd, key=lambda b: ((P[b].cx - ux) ** 2 + (P[b].cy - uy) ** 2, b)); g.order_move(self.pid, [u.id], b, own_only=True)
+
+    def pre_tick(self):
+        g = self.g
+        if g.over or not self.p.alive: return
+        if g.tick % 6 == 3: self._run_front(); self._run_expand()
+        if g.tick % 2 == 1: self._run_explore()
+        for name, sc in list(self.policies.items()):
+            if g.tick % sc["every"]: continue
+            api = PolicyApi(self, sc["mem"]); t0 = time.perf_counter()
+            try: sc["fn"](api)
+            except Exception as ex:
+                sc["err"] = "%s: %s" % (type(ex).__name__, ex)
+                g.event(self.pid, "warn", "policy %s crashed: %s" % (name, sc["err"]), key=("pol", name), gap=240)
+            sc["ms"] += (time.perf_counter() - t0) * 1000; sc["calls"] += 1
+            if sc["calls"] > 20 and sc["ms"] / sc["calls"] > self.policy_budget_ms + 0.2 * self.p.n_units:    # budget grows with the army
+                del self.policies[name]
+                g.event(self.pid, "warn", "policy %s removed: over time budget" % name)
+
+
+class PolicyApi:
+    """Snapshot handed to a policy's tick(api). Plain data only; orders go through api.cmd().
+
+    api.t                 tick (hours)              api.res      bank       api.mp  manpower pool
+    api.costs             {type: (res cost, manpower cost)}       api.unit_costs  {type: dict(res, mp, steel, oil, rare, hours)}
+    api.stock             dict(res, steel, oil, rare, coal, rubber): your stockpiles      api.income_by  dict(res (net of upkeep), steel, oil (net of fuel), rare, coal, rubber, mp) per day
+    api.stats             {type: dict(atk, dfn, spd, range, hard, ap, ...)}  your CURRENT unit values, upgrades included
+    api.tech              {line: dict(level (levels done), status 'open'|'researching'|'dead end'|'complete', cost (dict for the next level, or None), hours)}
+    api.tech_log          [dict(t, line, level, ok, gain, text)]  every result so far; whether a line goes further is unknown until tried
+    api.research          [[line, level, hours left]]  projects under way (at most 2)
+    api.army(level=0)     dict: condition of your own army and supply, at the detail you choose (same as `q army`): 0 totals {n, rdy, mor, str, ready, spent,
+                          dry, moving, contact, fighting, unsupplied}; 1 adds by_type, by_order, front {units_per_province, stock_mean, stock_empty, inflow_per_h,
+                          burn_per_h, short}; 2 adds provinces [{prov, n, rdy, mor, dry, moving, stock, inflow, burn, hops, fort, border}]
+    api.count(name, n=1)  add to a tally of your own (up to 60 names). It changes nothing in the war; your tallies are shown to you in the review afterwards,
+                          e.g. to see how often a condition in your orders was met or not
+    api.me                your faction's name
+    api.met               [names of factions you have come across]   the only ones you can deal with
+    api.pacts             {faction: dict(since, ends (hour or None), broken_by, kind 'pact'|'alliance'|'truce')}
+    api.deals             [dict(id, with, you_give {what: n}, they_give {what: n}, since, until)]   standing daily deliveries; stop one with `cancel <id>`
+    api.powers            {faction (you and everyone you met): dict(relation, land, cities, deposits {kind: per day}, deliveries)}   only from land you have explored
+    api.season            dict(name, day, days, next_in_hours, hardy, tropic)     api.no_fuel  True while your oil stock is empty; api.fuel_per_day
+                          api.provs[id] also has lat, cold (frozen now), freezes (in winter), jungle, coal, rubber
+    api.offers_in         [dict(id, frm, kind 'pact'|'alliance'|'trade'|'supply', hours, they_give {what: n}, you_give {what: n}, lapses)]   answer with accept/reject <id>
+    api.offers_out        [the same with `to`]         api.inbox  [dict(t, frm, text)] the last 20 letters you received
+    api.owner_name        {province you know to be someone's: faction name}   whose land is where, as far as you have seen
+    api.marks             {type: current model number}; a unit with u.old True is an older model (u.mark) and fights with its old values
+    api.depots            {province: dict(share, weight, opens_in, serves, load, capacity, output, city)}  your depots (see DEPOTS); api.depot_cost; api.enemy_depots {province: faction} seen so far
+    api.refit_cost        {type: dict(res, steel, oil, rare)}  price of `refit` per unit of that type; api.old_units = number of your units not on the current model
+    api.income            net income per day        api.capital  your capital province id
+    api.provs             {id: dict(terrain, elev (0-3), y, mp, fort (last seen), stock, flow (supplies/h), city, nbrs, owner 'me'|'enemy'|'neutral' (last known),
+                          who (owner's player id or -1), visible, supplied, steel, oil, rare (deposit yield per day, 0 if none), harsh (desert/tundra), sea (neighbours across water), x, y0 (key point, map cells))}   ONLY provinces you have explored (seen at least once); use .get() for anything else
+    api.me, api.players   your player id, number of factions (all others are enemies)
+    api.units             [dict(id, type, prov, str, rdy, plan (target or -1), bonus, dry, path, fighting, supplied, group, front (under the front
+                          or the expand standing order), expand, explore, xp (experience 0-100), mor (morale 0-100), sup (suppression 0-100), mark (model number), old (True: outdated model, see api.marks),
+                          state ('ready' 'moving' 'assault' 'defending' 'pinned' 'routing' 'shaken' 'preparing' 'digging' 'refitting'))]
+    api.formations        {group name: formation experience 0-100}
+    api.border            {your province touching enemy land: weight}  (before any contact: provinces touching neutral land)
+    api.neutral_border    [your provinces touching neutral land]   free land to take lies next to these
+    api.unexplored        [explored provinces with a neighbour you have never seen]   the edge of your map knowledge
+    api.enemy             {prov: dict(n, str, exact, types, who)}   enemy units you can currently see
+    api.enemy_capital     nearest known enemy capital (province id or None)      api.enemy_capitals  {player id: province}
+    api.mem               dict kept between calls
+    api.model             learned parameters loaded from a JSON file for this side ({} if none); see tools/fit_battle_model.py
+    api.cmd(line)         run a command line, returns the result text
+    api.q(text)           run a query            api.path(a, b)  list of provinces or None
+    """
+
+    def __init__(self, sess, mem):
+        g = sess.g; p = sess.p; pid = sess.pid; self._s = sess; self.mem = mem
+        self.t = g.tick; self.res = p.res; self.income = p.income - p.upkeep; self.capital = p.capital
+        self.model = sess.model
+        self.mp = p.mp; self.mp_income = p.mp_income; self.costs = {c: (s["cost"], s["mp"]) for c, s in p.stats.items()}
+        self.unit_costs = {c: dict(res=s["cost"], mp=s["mp"], steel=s["steel"], oil=s["oil"], rare=s["rare"], hours=s["time"]) for c, s in p.stats.items()}
+        self.stock = dict(res=p.res, **p.bank)
+        self.income_by = dict(res=p.income - p.upkeep, mp=p.mp_income, **p.inc); self.income_by["oil"] -= p.fuel
+        self.stats = {c: dict(s) for c, s in p.stats.items()}
+        self.deals = sess.dip_view()["deals"]; self.powers = sess.powers_view(); self.no_fuel = p.nofuel; self.fuel_per_day = p.fuel
+        _sd = 24 * D.SEASON_DAYS; self.season = dict(name=D.SEASONS[g.season_at(g.tick, g.provs[p.capital].lat)], day=(g.tick % _sd) // 24 + 1, days=D.SEASON_DAYS, next_in_hours=_sd - g.tick % _sd, hardy=p.hardy, tropic=p.tropic)
+        dv = sess.dip_view(); self.me = p.faction; self.met = dv["met"]; self.pacts = dv["pacts"]; self.offers_in = dv["offers_in"]; self.offers_out = dv["offers_out"]; self.inbox = dv["inbox"]
+        self.owner_name = {i: g.players[o].faction for i, o in p.known_owner.items() if o >= 0 and o != p.id}
+        self.marks = {c: s["mark"] for c, s in p.stats.items()}; self.refit_cost = {c: g.refit_cost(p.id, c) for c in p.stats}
+        self.old_units = sum(1 for u in g.punits[p.id].values() if u.st is not p.stats[u.type])
+        self.depots = sess.depot_view(); self.depot_cost = D.DEPOT_COST; self.enemy_depots = {d: g.players[o].faction for d, o in p.known_depots.items()}
+        self.tech = sess.tech_view(); self.tech_log = [dict(x) for x in p.tech_log]; self.research = [list(r) for r in p.research]
+        self.enemy_capitals = dict(p.known_caps); self.enemy_capital = sess._near_cap()
+        ko = p.known_owner; rel = p.explored
+        self.players = len(g.players); self.me = pid
+        self.provs = {pr.id: dict(terrain=pr.terrain, elev=pr.elev, y=pr.y, mp=pr.mp, city=pr.city, nbrs=pr.nbrs,
+                                  fort=p.known_fort.get(pr.id, 0), stock=g.stock[pr.id] if g.owner[pr.id] == pid else 0,
+                                  flow=g.stock_flow(pid, pr.id),
+                                  owner="me" if ko.get(pr.id, -1) == pid else "neutral" if ko.get(pr.id, -1) < 0 else "enemy",
+                                  who=ko.get(pr.id, -1), visible=pr.id in p.visible, harsh=bool(pr.biome), sea=pr.sea, x=pr.cx, y0=pr.cy, steel=pr.steel, oil=pr.oil, rare=pr.rare, coal=pr.coal, rubber=pr.rubber, lat=pr.lat, cold=pr.id in g.cold, freezes=g.freezes(pr.id, 3), jungle=pr.id in g.jungle,
+                                  supplied=pr.id in p.supplied) for pr in (g.provs[i] for i in sorted(rel)) if pr.terrain != "water"}
+        self.units = [dict(id=u.id, type=u.type, prov=u.prov, str=u.str, path=list(u.path), fighting=bool(u.fighting),
+                           supplied=u.supplied, group=u.group, front=u.id in sess.front or u.id in sess.expand, expand=u.id in sess.expand, explore=u.id in sess.explore, rdy=u.rdy, plan=u.plan_t, xp=u.xp, mor=u.mor, sup=u.sup, state=g.state(u), mark=u.st["mark"], old=u.st is not p.stats[u.type],
+                           bonus=u.plan_b, dry=u.dry)
+                      for u in g.punits[pid].values()]
+        self.formations = dict(p.fxp)
+        self.border = sess.border(); self.neutral_border = list(sess.neutral_border)
+        self.unexplored = [i for i in sorted(rel) if g.provs[i].terrain != "water" and any(b not in rel for b in g.provs[i].nbrs)]
+        self.enemy = {}
+        for i in p.visible:
+            e = g.estimate(pid, i)
+            if e and e[3]: self.enemy[i] = dict(n=e[3], str=e[2], exact=e[0] == 2, types=e[1], who=next(u.owner for u in g.pos[i] if u.owner != pid))
+
+    def army(self, level=0): return self._s.army_view(level)
+    def count(self, name, n=1):
+        c = self._s.counters; name = str(name)[:40]
+        if name in c or len(c) < 60: c[name] = c.get(name, 0) + n
+    def cmd(self, line): return self._s.act(line)
+    def q(self, text): return self._s.query(text)
+    def path(self, a, b): return self._s.known_path(a, b)

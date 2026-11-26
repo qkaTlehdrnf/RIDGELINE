@@ -1,0 +1,138 @@
+{
+ "factions": [
+  "aurum",
+  "sable",
+  "cinder"
+ ],
+ "models": [
+  "claude-opus-5-5",
+  "claude-opus-5-5",
+  "claude-opus-5-5"
+ ],
+ "cost": 1.5409418000000001,
+ "gens": [
+  {
+   "gen": 1,
+   "policies": [
+    "runs/league/aurum/gen0.py",
+    "runs/league/sable/gen0.py",
+    "runs/league/cinder/gen0.py"
+   ],
+   "summary": [
+    "war 1 with gen0 policy: places 2,2, final provinces 240,294",
+    "war 1 with gen0 policy: places 3,1, final provinces 183,600",
+    "war 1 with gen0 policy: places 1,3, final provinces 509,106"
+   ],
+   "secs": 205,
+   "results": [
+    {
+     "seed": 50,
+     "winner": 2,
+     "ticks": 3000,
+     "provinces": [
+      240,
+      183,
+      509
+     ],
+     "alive": [
+      true,
+      true,
+      true
+     ],
+     "units": [
+      691,
+      1563,
+      1694
+     ],
+     "kills": [
+      52,
+      99,
+      142
+     ],
+     "start": {
+      "provs": [
+       65,
+       61,
+       83
+      ],
+      "units": [
+       124,
+       112,
+       116
+      ]
+     },
+     "policy_errors": [
+      null,
+      null,
+      null
+     ]
+    },
+    {
+     "seed": 51,
+     "winner": 1,
+     "ticks": 3000,
+     "provinces": [
+      294,
+      600,
+      106
+     ],
+     "alive": [
+      true,
+      true,
+      true
+     ],
+     "units": [
+      1063,
+      1378,
+      1649
+     ],
+     "kills": [
+      6,
+      18,
+      201
+     ],
+     "start": {
+      "provs": [
+       97,
+       67,
+       55
+      ],
+      "units": [
+       152,
+       102,
+       92
+      ]
+     },
+     "policy_errors": [
+      null,
+      null,
+      null
+     ]
+    }
+   ],
+   "notes": [
+    {
+     "faction": "aurum",
+     "how": "written",
+     "said": "Both wars ended second, and the review shows three problems:\n\n- **Unspent wealth.** I finished with about 70k res, 7k steel and 40k manpower unused. Rivals fielded twice my army. The recruit gate (1–2 units per call) was the bottleneck, so the new orders spend the bank in large batches.\n- **Assaults almost never worked.** 2 of 164 succeeded. Nearly all went in with readiness under 34 and no plan bonus, and many hit level-3 forts. Units marched, prepared briefly and charged tired.\n- **Expansion was too slow** compared with cinder.\n\nNew orders:\n\n- **Recruiting:** spend about 60% of spare res per call, spread over several types. Early on, cheap fast cav and inf help grab neutral land. Later the mix leans toward art and grn, with eng against forts.\n- **Operations:** up to 3 run at once, each attacking from up to 3 neighbouring provinces, since more directions raise the odds a lot in the model.\n  - Phases: gather, then rest until readiness is about 65 or more, then prepare with a rec nearby, then launch once the bonus is at least 35.\n  - Artillery stays in the staging province and shells the target from there.\n  - Targets with forts and strong defenders are penalised heavily.\n  - An operation aborts if the defenders grow too strong.\n- **Research:** economy lines first, then combat lines across all unit types I build.\n- **Defence:** the capital-emergency rule stays."
+    },
+    {
+     "faction": "sable",
+     "how": "written",
+     "said": "The two wars point the same way. Expansion decides the result: I won map 51 by holding about 600 provinces and lost map 50 at 183. Defence already holds well, with 2 of 176 enemy assaults succeeding. My own assaults almost never work (2 of 128) because units attacked straight off the march, with readiness below 35, little or no plan bonus, and against forts. I also finished with huge unspent stockpiles (129k res).\n\nNew orders:\n- **Land grab first.** Recruit spending scales with the bank. Many cheap fast cav go on `expand`, and up to 4 rec explore, since unexplored land is what blocks expansion.\n- **Defence.** Infantry, anti-tank guns and some militia hold the border with the front order.\n- **Strike group.** Assault infantry, artillery and infantry assault only with good odds and full preparation:\n  - Gather on one province next to the target.\n  - Rest until readiness is about 70 or higher.\n  - Prepare with a rec beside the target for the larger bonus, and launch only when the bonus is about 45%.\n  - Pick targets with weak or no defenders, low forts and several of my provinces touching them, checked with the battle model.\n  - After an assault, pull back to a quiet province to refit before choosing the next target.\n- **Research.** Economy and staffwork first, then artillery and assault-infantry weapons."
+    },
+    {
+     "faction": "cinder",
+     "how": "written",
+     "said": "Both wars show the same failure: assaults almost never worked (2 of 95, then 0 of 48), and nearly all of them were launched with readiness under 34. Units marched to the staging province, which drains readiness, and then attacked at once with little or no plan bonus. Only one operation ran at a time, with armies of 1,600 units. In war 1, 108k res and 50k manpower were left unspent. In war 2, expansion stalled early.\n\nChanges:\n- **Several operations at once.** Up to about one per 50 front units, at most 7.\n- **Attacks from more than one side.** Each operation stages from up to 3 own provinces next to the target. The fitted model gives a strong weight to the number of directions.\n- **Wait before launching.** Units prepare until readiness and plan bonus are high (about 60 readiness, 40% bonus) or the model's odds are good. Artillery holds next door and shells the key point.\n- **A scout for every operation.** A rec next to the target raises the bonus cap to +75% and gives exact enemy counts.\n- **Cancel weak attacks.** If our strength looks too low against the target's defence, the units go back to the front.\n- **More scouting.** 5 rec early instead of 2, for faster exploration and expansion.\n- **Spend the surplus.** When the bank is large, recruit more each tick, with a balanced inf/grn/art/atg mix.\n- **Research order.** Drill and staffwork move earlier."
+    }
+   ],
+   "next_policies": [
+    "runs/league/aurum/gen1.py",
+    "runs/league/sable/gen1.py",
+    "runs/league/cinder/gen1.py"
+   ],
+   "cost_so_far": 1.54
+  }
+ ]
+}

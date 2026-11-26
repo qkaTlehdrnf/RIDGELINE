@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ridgeline Viewer</title>
+<style>
+:root{--bg:#14171c;--fg:#e6e8ec;--mut:#8b93a1;--panel:#1d2129;--line:#2c323d;--p0:#f2b233;--p1:#b56cf0}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,sans-serif}
+.wrap{max-width:1100px;margin:0 auto;padding:16px;display:grid;grid-template-columns:minmax(0,1fr) 260px;gap:16px}
+@media(max-width:800px){.wrap{grid-template-columns:1fr}}
+canvas{width:100%;aspect-ratio:1;background:#000;border:1px solid var(--line);border-radius:6px;image-rendering:pixelated}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:12px;margin-bottom:12px}
+h1{font-size:16px;margin:0 0 8px}h2{font-size:12px;margin:0 0 6px;color:var(--mut);text-transform:uppercase;letter-spacing:.06em}
+button,select{background:#2a303b;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:5px 9px;font:inherit;cursor:pointer}
+button.on{background:#3d4656;border-color:#6b7890}
+.row{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px}
+.sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:middle}
+input[type=range]{width:100%}.mut{color:var(--mut)}.num{font-variant-numeric:tabular-nums}
+</style></head><body><div class="wrap">
+<div><canvas id="c" width="768" height="768"></canvas>
+<div class="row" style="margin-top:8px"><button id="play">Pause</button><input id="seek" type="range" min="0" max="0" value="0"></div></div>
+<div>
+<div class="panel"><h1>Ridgeline</h1><div id="status" class="mut">loading</div></div>
+<div class="panel"><h2>Players</h2><div id="pl"></div></div>
+<div class="panel"><h2>Fog of war view</h2><div class="row">
+<button data-fog="-1" class="on">All</button><button data-fog="0">P0</button><button data-fog="1">P1</button></div>
+<div class="mut">Pick a player to see only what that side currently sees.</div></div>
+<div class="panel"><h2>Speed</h2><div class="row" id="spd"></div></div>
+<div class="panel"><h2>Legend</h2>
+<div><span class="sw" style="background:#27402f"></span>low <span class="sw" style="background:#56683a"></span>mid <span class="sw" style="background:#8a8454"></span>high</div>
+<div><span class="sw" style="background:#b9a070"></span>ramp <span class="sw" style="background:#1f5a2a"></span>brush <span class="sw" style="background:#3a3d44"></span>rock <span class="sw" style="background:#4fd0e0"></span>ore</div>
+<div class="mut" style="margin-top:6px">Squares are structures, circles ground units, diamonds flyers.</div></div>
+</div></div>
+<script>
+const EMBED=/*REPLAY*/null/*END*/;
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');
+let map=null,frames=[],cur=0,playing=true,fog=-1,live=!EMBED,rate=1,last=null;
+const COL=['#f2b233','#b56cf0'];
+function unpack(b64,n){const s=atob(b64),o=new Uint8Array(n);for(let i=0;i<n;i++)o[i]=(s.charCodeAt(i>>3)>>(i&7))&1;return o}
+function terrain(){const w=map.w,h=map.h,S=cv.width/w;const t=document.createElement('canvas');t.width=cv.width;t.height=cv.height;const c=t.getContext('2d');
+ const L=['#27402f','#56683a','#8a8454'];
+ for(let y=0;y<h;y++)for(let x=0;x<w;x++){const i=y*w+x;let col=L[map.level[i]];
+  if(map.block[i])col='#3a3d44';else if(map.ramp[i])col='#b9a070';else if(map.brush[i])col='#1f5a2a';
+  c.fillStyle=col;c.fillRect(x*S,y*S,S,S);}
+ // cliff edges
+ c.strokeStyle='rgba(0,0,0,.55)';c.lineWidth=2;
+ for(let y=0;y<h;y++)for(let x=0;x<w;x++){const i=y*w+x;if(map.ramp[i])continue;
+  if(x+1<w&&!map.ramp[i+1]&&map.level[i]!=map.level[i+1]){c.beginPath();c.moveTo((x+1)*S,y*S);c.lineTo((x+1)*S,(y+1)*S);c.stroke()}
+  if(y+1<h&&!map.ramp[i+w]&&map.level[i]!=map.level[i+w]){c.beginPath();c.moveTo(x*S,(y+1)*S);c.lineTo((x+1)*S,(y+1)*S);c.stroke()}}
+ return t}
+let tcan=null;
+function draw(f){if(!f||!map)return;if(!tcan)tcan=terrain();const w=map.w,S=cv.width/w;ctx.drawImage(tcan,0,0);
+ let vis=null;if(fog>=0)vis=unpack(f.vis[fog],w*map.h);
+ for(const e of f.e){const [id,ow,ty,x,y,hp,size,prog]=e;
+  if(vis&&ow!=fog&&ow>=0&&!vis[Math.floor(y)*w+Math.floor(x)])continue;
+  if(ty=='ore'){ctx.fillStyle='#4fd0e0';ctx.globalAlpha=.35+.65*hp;ctx.fillRect((x-.35)*S,(y-.35)*S,.7*S,.7*S);ctx.globalAlpha=1;continue}
+  ctx.fillStyle=COL[ow];
+  if(size){ctx.globalAlpha=prog<1?.45:1;ctx.fillRect((x-size/2)*S+1,(y-size/2)*S+1,size*S-2,size*S-2);ctx.globalAlpha=1;
+   ctx.fillStyle='#000';ctx.font='bold '+Math.round(S*.9)+'px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(ty,x*S,y*S);
+   if(hp<1){ctx.fillStyle='#e5484d';ctx.fillRect((x-size/2)*S+1,(y+size/2)*S-3,(size*S-2)*hp,2)}}
+  else{const r={wrk:.22,inf:.3,hvy:.42,art:.36,fly:.34}[ty]*S;ctx.beginPath();
+   if(ty=='fly'){ctx.moveTo(x*S,y*S-r*1.3);ctx.lineTo(x*S+r*1.3,y*S);ctx.lineTo(x*S,y*S+r*1.3);ctx.lineTo(x*S-r*1.3,y*S);ctx.closePath()}
+   else ctx.arc(x*S,y*S,r,0,6.3);
+   ctx.fill();if(ty=='art'){ctx.strokeStyle='#fff';ctx.lineWidth=1.5;ctx.stroke()}
+   if(ty=='hvy'){ctx.strokeStyle='#000';ctx.lineWidth=2;ctx.stroke()}
+   if(hp<1){ctx.fillStyle='#e5484d';ctx.fillRect(x*S-r,y*S+r+1,2*r*hp,2)}}}
+ if(vis){ctx.fillStyle='rgba(5,8,12,.62)';for(let i=0;i<vis.length;i++)if(!vis[i])ctx.fillRect((i%w)*S,Math.floor(i/w)*S,S,S)}
+ const s=Math.floor(f.t/10);document.getElementById('status').textContent=(live?'LIVE ':'REPLAY ')+'tick '+f.t+' ('+Math.floor(s/60)+':'+String(s%60).padStart(2,'0')+')'+(f.over?' — game over, winner '+(f.winner==null?'none':'P'+f.winner):'');
+ let h='';for(let p=0;p<2;p++){const n={};for(const e of f.e)if(e[1]==p)n[e[2]]=(n[e[2]]||0)+1;
+  h+='<div style="margin-bottom:6px"><span class="sw" style="background:'+COL[p]+'"></span><b>P'+p+'</b> '+map.factions[p]+'<div class="num mut">ore '+Math.round(f.ore[p])+' · supply '+f.sup[p][0]+'/'+f.sup[p][1]+'</div><div class="num mut">'+Object.entries(n).map(a=>a[0]+' '+a[1]).join(' · ')+'</div></div>'}
+ document.getElementById('pl').innerHTML=h}
+document.querySelectorAll('[data-fog]').forEach(b=>b.onclick=()=>{fog=+b.dataset.fog;document.querySelectorAll('[data-fog]').forEach(x=>x.classList.toggle('on',x==b));draw(last)});
+const seek=document.getElementById('seek'),play=document.getElementById('play');
+play.onclick=()=>{playing=!playing;play.textContent=playing?'Pause':'Play';if(live)fetch('/control?pause='+(playing?0:1),{method:'POST'})};
+const speeds=live?[0.5,1,2,4,8,20]:[1,2,4,8,16];
+speeds.forEach(v=>{const b=document.createElement('button');b.textContent='×'+v;b.onclick=()=>{rate=v;if(live)fetch('/control?speed='+v,{method:'POST'});
+ document.querySelectorAll('#spd button').forEach(x=>x.classList.toggle('on',x==b))};if(v==1)b.classList.add('on');document.getElementById('spd').appendChild(b)});
+async function init(){
+ if(EMBED){map=EMBED.map;frames=EMBED.frames;seek.max=frames.length-1;seek.oninput=()=>{cur=+seek.value;last=frames[cur];draw(last)};
+  setInterval(()=>{if(!playing)return;cur=Math.min(frames.length-1,cur+rate);seek.value=cur;last=frames[cur];draw(last)},100)}
+ else{seek.style.display='none';map=await (await fetch('/mapdata')).json();
+  setInterval(async()=>{try{last=await (await fetch('/spectate')).json();draw(last)}catch(e){}},200)}}
+init();
+</script></body></html>

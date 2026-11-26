@@ -1,0 +1,22 @@
+GAMES (your policy's view; each seed is played from both starts): 3 wins of 6
+ seed 30 as P0: lost/behind after 3000 h. provinces 79 vs 120, units 471 vs 641, destroyed 59 lost 0. start: provinces 41 vs 40, units 60 vs 48.
+   day:provinces(me/enemy):units(me/enemy):active assaults  5:54/63:83/68:0  25:80/118:176/201:2  45:80/119:260/323:1  65:80/119:326/447:0  85:79/120:384/548:0  105:79/120:431/621:0  125:79/120:471/640:0
+ seed 30 as P1: WON after 3000 h. provinces 116 vs 83, units 689 vs 484, destroyed 1 lost 0. start: provinces 40 vs 41, units 48 vs 60.
+   day:provinces(me/enemy):units(me/enemy):active assaults  5:63/54:68/83:0  25:115/83:204/175:0  45:116/83:337/260:0  65:116/83:449/333:0  85:116/83:547/393:0  105:116/83:625/442:0  125:116/83:689/484:0
+ seed 31 as P0: lost/behind after 3000 h. provinces 13 vs 185, units 82 vs 519, destroyed 12 lost 253. start: provinces 39 vs 39, units 60 vs 49.
+   day:provinces(me/enemy):units(me/enemy):active assaults  5:67/66:78/74:0  25:83/98:176/184:1  45:83/99:246/299:2  65:82/105:313/388:4  85:80/109:266/481:4  105:70/124:213/492:5  125:13/185:82/519:2
+ seed 31 as P1: WON after 3000 h. provinces 121 vs 91, units 493 vs 295, destroyed 85 lost 107. start: provinces 39 vs 39, units 49 vs 60.
+   day:provinces(me/enemy):units(me/enemy):active assaults  5:66/67:74/78:0  25:97/88:183/173:1  45:97/89:292/226:4  65:107/88:397/236:3  85:110/92:481/257:3  105:117/90:461/246:4  125:121/91:492/293:4
+ seed 32 as P0: lost/behind after 3000 h. provinces 101 vs 120, units 396 vs 420, destroyed 4 lost 22. start: provinces 34 vs 33, units 52 vs 48.
+   day:provinces(me/enemy):units(me/enemy):active assaults  5:49/58:69/67:0  25:95/108:148/188:0  45:95/113:235/306:3  65:94/121:273/410:3  85:95/121:293/423:1  105:98/120:340/421:2  125:101/120:395/420:1
+ seed 32 as P1: WON after 3000 h. provinces 137 vs 91, units 687 vs 425, destroyed 9 lost 4. start: provinces 33 vs 34, units 48 vs 52.
+   day:provinces(me/enemy):units(me/enemy):active assaults  5:58/49:67/69:0  25:105/98:188/149:0  45:108/98:311/236:1  65:117/99:420/303:2  85:124/98:520/356:1  105:132/95:606/403:3  125:137/91:686/425:3
+YOUR ASSAULTS: 28/130 succeeded. average attackers 3.7 units from 1.2 directions, readiness 36, plan bonus 13%, strength lost 157 per assault, 89 h each.
+ by strength ratio (attackers:defenders): 0..1 2/45 (loss 48 per assault); 1..1.5 3/25 (loss 64 per assault); 1.5..2 3/9 (loss 103 per assault); 2..3 12/23 (loss 274 per assault); 3..5 7/22 (loss 330 per assault); 5..1e+09 1/6 (loss 358 per assault)
+ by attackers' readiness: 0..25 17/63 (loss 172 per assault); 25..50 4/22 (loss 261 per assault); 50..75 5/22 (loss 100 per assault); 75..101 2/23 (loss 71 per assault)
+ by plan bonus %: 0..1 8/81 (loss 119 per assault); 1..25 8/16 (loss 318 per assault); 25..45 1/6 (loss 692 per assault); 45..76 11/27 (loss 57 per assault)
+ by fort level: 0..1 16/73 (loss 75 per assault); 1..2 8/34 (loss 173 per assault); 2..3 1/7 (loss 146 per assault); 3..4 3/16 (loss 501 per assault)
+ by directions: 1..2 27/114 (loss 104 per assault); 2..3 1/13 (loss 273 per assault); 3..9 0/3 (loss 1679 per assault)
+ by share of art/arm/eng among attackers: 0.00..0.01 8/53 (loss 66 per assault); 0.01..0.25 0/7 (loss 513 per assault); 0.25..0.50 2/15 (loss 646 per assault); 0.50..1.01 18/55 (loss 66 per assault)
+ by supply stock behind the attackers: 0..30 1/31 (loss 441 per assault); 30..100 8/24 (loss 84 per assault); 100..1e+09 19/75 (loss 63 per assault)
+ENEMY ASSAULTS on you: 68/175 succeeded; by ratio: 0..1 6/57 (loss 203 per assault); 1..1.5 6/33 (loss 570 per assault); 1.5..2 6/18 (loss 411 per assault); 2..3 21/31 (loss 277 per assault); 3..5 18/25 (loss 48 per assault); 5..1e+09 10/10 (loss 11 per assault)
