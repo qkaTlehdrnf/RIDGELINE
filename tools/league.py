@@ -31,7 +31,7 @@ You do not move units by hand. You write your faction's standing orders: one Pyt
 
 Technical limits: one file, no imports (the name `math` is available), plain Python builtins only, must define tick(api). An exception inside tick is caught and that call is lost; a policy that is slower than about 25 ms + 0.2 ms per unit on average is removed for the rest of the war. Orders go through api.cmd("...") in the command language of the rules; api.cmd returns the result text (starts with "ok" on success).
 
-Reply with your reasoning in at most 200 words, then the COMPLETE policy file in one ```python block. After it you may add one ```letters block (see LETTERS in the prompt, when there is one) and one `REVIEW:` line (see REVIEW DETAIL), and nothing else."""
+Reply with your reasoning in at most 200 words, then the COMPLETE policy file in one ```python block. After it you may add one ```letters block (see LETTERS in the prompt, when there is one), one ```feedback block (see FEEDBACK TO THE DESIGNERS, when there is one) and one `REVIEW:` line (see REVIEW DETAIL), and nothing else."""
 
 SYNTAX = '''# This only shows how the API is called. It is not a strategy.
 def tick(api):
@@ -328,6 +328,10 @@ def main():
                                   "Nobody else reads it. Letters you received since your last rewrite:\n%s" % (
                                       ", ".join(factions[i] for i in sorted(met[pid]) if i != pid) or "nobody yet", D.MAIL_LEN,
                                       "\n".join(" from %s: %s" % (factions[f], t) for f, t in inbox.get(pid, inbox.get(str(pid), []))) or " none"),
+                                  "FEEDBACK TO THE DESIGNERS\nThe people who build this world read what you write here and nobody else does; it has no effect on your results. "
+                                  "If you like, add a block\n```feedback\n<up to 150 words>\n```\nabout what would make your faction easier for you to run: commands or api calls that are missing, "
+                                  "awkward or too slow, information you needed and could not get or got in a poor form, rules that were unclear, and anything in this review or the briefing that is confusing. "
+                                  "You may send it together with KEEP.",
                                   "Review your wars and rewrite your standing orders as you see fit. If you want to keep the current policy unchanged, reply with the single word KEEP."])
             return write(pid, gen, prompt)
         out = list(POOL.map(again, range(n))); new = {}
@@ -338,6 +342,10 @@ def main():
                 if mm and mm.group(1).lower() in factions and factions.index(mm.group(1).lower()) in met[pid] and factions.index(mm.group(1).lower()) != pid:
                     new.setdefault(factions.index(mm.group(1).lower()), []).append((pid, mm.group(2).strip()[:D.MAIL_LEN]))
         for pid, (f, text, how) in enumerate(out):
+            m = re.search(r"```feedback\n(.*?)```", text, re.S)
+            if m and m.group(1).strip():
+                with open(os.path.join(OUT, "feedback_gen%d.md" % gen), "a", encoding="utf-8") as fb:
+                    fb.write("## %s (%s)\n\n%s\n\n" % (factions[pid], models[pid], m.group(1).strip()))
             m = re.search(r"REVIEW:\s*(brief|standard|full)", text, re.I)
             if m: det[str(pid)] = m.group(1).lower()
         log["letters"] = new; entry["letters"] = [[factions[f], factions[to], t] for to, rows in new.items() for f, t in rows]
