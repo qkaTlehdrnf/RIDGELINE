@@ -55,6 +55,7 @@ function resize(){const r=devicePixelRatio||1;c.width=box.clientWidth*r;c.height
 function sx(x){return (x-cam.x)*cam.s+box.clientWidth/2}function sy(y){return (y-cam.y)*cam.s+box.clientHeight/2}
 function draw(){if(lastPaint!==fr||lastSel!==sel)paintMap();const r=devicePixelRatio||1,w=box.clientWidth,h=box.clientHeight;ctx.setTransform(r,0,0,r,0,0);ctx.fillStyle='#0a1622';ctx.fillRect(0,0,w,h);
  ctx.imageSmoothingEnabled=cam.s<3;ctx.drawImage(off,sx(0),sy(0),GW*cam.s,GH*cam.s);
+ ctx.strokeStyle='rgba(70,150,235,.9)';ctx.lineWidth=Math.max(1,cam.s*.35);ctx.lineJoin='round';for(const rv of DATA.rivers||[]){ctx.beginPath();for(let i=0;i<rv.length;i+=2){const x=sx(rv[i]),y=sy(rv[i+1]);i?ctx.lineTo(x,y):ctx.moveTo(x,y)}ctx.stroke()}
  const base=fr*P,o=own[fr],k=Math.max(.6,Math.min(3,cam.s*.9));
  for(let p=0;p<P;p++){const n=cnt[base+p];if(!n||!land[p])continue;const x=sx(DATA.px[p]),y=sy(DATA.py[p]);if(x<-9||y<-9||x>w+9||y>h+9)continue;const rad=k*(0.35+Math.sqrt(n*DATA.div)*.2);
   ctx.beginPath();ctx.arc(x,y,rad,0,7);ctx.fillStyle=(sel>=0&&o[p]!==sel)?'rgba(255,255,255,.2)':'rgba(255,255,255,.75)';ctx.fill();ctx.lineWidth=.5;ctx.strokeStyle='rgba(0,0,0,.5)';ctx.stroke()}
@@ -129,7 +130,15 @@ def main():
         s = sd.get(t) or ss[min(len(ss) - 1, j - 1)]
         dep.append(s["depots"]); st.append(dict(pacts=s["pacts"], att=att, won=won))
     ml = models.split(",") if models else [""] * nf
-    data = dict(gw=gw // k, gh=gh // k, cells=base64.b64encode(small.astype("<i2").tobytes()).decode(), factions=h["factions"],
+    rivers = []
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+        from ridgeline import worldgen as W
+        if gw * 420 == gh * 1152:
+            deg = 360.0 / gw
+            rivers = [[round(v, 1) for lat, lon in line for v in ((lon + 180.0) / deg / k, (W.LAT_N - lat) / deg / k)] for line in W.RIVERS.values()]
+    except Exception: pass
+    data = dict(rivers=rivers, gw=gw // k, gh=gh // k, cells=base64.b64encode(small.astype("<i2").tobytes()).decode(), factions=h["factions"],
                 models=[("Opus" if "opus" in x else "Haiku" if "haiku" in x else x) for x in ml], colors=colors(nf),
                 px=[round(p["cx"] / k, 1) for p in sc["provs"]], py=[round(p["cy"] / k, 1) for p in sc["provs"]], land=[int(p["terrain"] != "water") for p in sc["provs"]],
                 names={str(p["id"]): p["name"] for p in sc["provs"] if p.get("name")}, capitals=sc["capitals"], t=T, owner0=owner0, changes=changes,

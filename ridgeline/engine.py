@@ -1038,7 +1038,7 @@ class Game:
                     def_n=len(dfd), def_str=round(sum(max(0.0, o.str) for o in dfd)), def_rdy=round(sum(o.rdy for o in dfd) / len(dfd)),
                     def_types=dc, def_supplied=int(all(o.supplied for o in dfd)), power=round(pw[0], 1), resist=0.0,
                     sea=int(any(d in t.sea for d in dirs)), a0=0.0, d0=0.0, ids={}, dids={},
-                    aimed=sum(1 for u in att if prov in u.path), entered=int(any(u.prov == prov for u in att)))      # attackers actually ordered into the province (0 = fire in passing)
+                    aimed=sum(1 for u in att if prov in u.path and u.type != "rec"), entered=int(any(u.prov == prov for u in att)))      # attackers actually ordered into the province (0 = fire in passing)
             ep["last"] = self.tick
             for u in att:                                            # units join an assault as they come into range
                 if u.id not in ep["ids"]: ep["ids"][u.id] = (max(0.0, u.str), u.type, u.rdy, u.plan_b if u.plan_t == prov else 0.0, u.xp, u.mor)
