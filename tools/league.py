@@ -139,6 +139,11 @@ def report(pid, factions, games, detail="standard"):
         if dp:
             L.append(" your depots at the end (province: share of treasury, provinces served, load/capacity, output): " + ("; ".join("P%s: %d%%, %d, %.0f/%g, x%.2f" % (d, round(v["share"] * 100), v["serves"], v["load"], v["capacity"], v["output"]) for d, v in dp["now"].items()) or "none left"))
             for t_, x_ in dp["log"]: L.append("  t%d %s" % (t_, x_))
+        vb = gme.get("verbs", [{}] * n)[pid]; rj = gme.get("rejects", [[]] * n)[pid]
+        if vb: L.append(" commands your orders issued (verb count): " + ", ".join("%s %d" % kv for kv in sorted(vb.items(), key=lambda kv: -kv[1])))
+        if rj:
+            L.append(" commands that were refused, most frequent first (numbers replaced by N):")
+            for k_, c_ in rj: L.append("  %dx %s" % (c_, k_))
         ct = gme.get("counters", [{}] * n)[pid]
         if ct: L.append(" your own tallies (api.count): " + ", ".join("%s %d" % kv for kv in sorted(ct.items())))
         elif lvl >= 1: L.append(" your own tallies (api.count): none recorded")
@@ -224,6 +229,7 @@ def play(policies, factions, seed, bmodel, max_ticks, letters=None):
                 inc=[{k: round(v) for k, v in p.inc.items()} for p in g.players],
                 kinds=[_kinds(g, i) for i in range(n)],
                 met=[sorted(g.met(i) | set(g.players[i].met)) for i in range(n)], dip=list(g.dip_log),
+                rejects=[sorted(s_.rejects.items(), key=lambda kv: -kv[1])[:8] for s_ in sess], verbs=[dict(s_.verbs) for s_ in sess],
                 army=[(s_.army_view(2) if g.players[s_.pid].alive else None) for s_ in sess], counters=[dict(s_.counters) for s_ in sess],
                 depots=[dict(now=s_.depot_view(), log=[(t_, x_) for t_, k_, x_ in g.players[s_.pid].events if k_ == "depot"][-12:]) for s_ in sess],
                 old=[sum(1 for u in g.punits[i].values() if u.st is not g.players[i].stats[u.type]) for i in range(n)])

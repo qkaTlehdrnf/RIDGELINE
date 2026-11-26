@@ -13,6 +13,7 @@ Two ways to drive units, usable together:
   2. live commands: an agent that looks at the delta every few seconds and overrides or redirects.
 """
 import math
+import re
 import time
 
 from . import data as D
@@ -60,7 +61,7 @@ class Session:
         self.no_go = set()          # unexplored provinces that turned out unreachable (water)
         self.neutral_border = []
         self.policy_budget_ms = 25.0
-        self.stats = dict(cmds=0, errors=0)
+        self.stats = dict(cmds=0, errors=0); self.rejects = {}; self.verbs = {}
         self.multi = len(game.players) > 2
         self.sources = {}           # installed policy name -> (code, every)
         self.candidates = {}        # strategies a commander has drafted for trials: name -> (code, every)
@@ -489,11 +490,14 @@ class Session:
     def economy_view(self):
         """Your developed or road-built provinces (richest first), what is being built, upkeep, and who shares roads with you."""
         g, p = self.g, self.p; rows = []
-        ct = lambda c: "%d res + %d %s" % (c[0], c[2], c[1])
+        ct = lambda c: "%d res + %d %s" % (c[0], c[2], c[1]); cd = lambda c: {"res": c[0], c[1]: c[2]}
+        can = lambda c: p.res >= c[0] and p.bank[c[1]] >= c[2]
         for i in g.owned[p.id]:
             if g.dev[i] > 0 or g.infra[i] > 0:
                 rows.append(dict(prov=i, dev=round(g.dev[i], 2), room=g.room(i), infra=round(g.infra[i], 2), agg=round(g.agg[i], 3), yield_now=round(g.prod[i], 2), base=g.provs[i].y, city=g.provs[i].city,
-                                 dev_cost=ct(g.dev_cost(i)) if g.dev[i] + 1 <= D.DEV_MAX else "top", infra_cost=ct(g.infra_cost(i)) if g.infra[i] + 1 <= D.INFRA_MAX else "top"))
+                                 dev_cost=cd(g.dev_cost(i)) if g.dev[i] + 1 <= D.DEV_MAX else None, infra_cost=cd(g.infra_cost(i)) if g.infra[i] + 1 <= D.INFRA_MAX else None,
+                                 dev_text=ct(g.dev_cost(i)) if g.dev[i] + 1 <= D.DEV_MAX else "top", infra_text=ct(g.infra_cost(i)) if g.infra[i] + 1 <= D.INFRA_MAX else "top",
+                                 can_dev=g.dev[i] + 1 <= D.DEV_MAX and can(g.dev_cost(i)), can_infra=g.infra[i] + 1 <= D.INFRA_MAX and can(g.infra_cost(i))))
         rows.sort(key=lambda r: (-r["yield_now"], r["prov"]))
         return dict(income=round(p.income, 1), upkeep=round(p.upkeep, 1), maint=round(p.maint, 1), works=[list(w) for w in p.works],
                     access=sorted(g.players[b].faction for a, b in g.access if a == p.id), provs=rows)
@@ -575,13 +579,16 @@ class Session:
         for raw in text.replace(";", "\n").split("\n"):
             line = raw.strip().strip("`").strip()
             if not line or line.startswith(("#", "//")): continue
-            n += 1; self.stats["cmds"] += 1
+            n += 1; self.stats["cmds"] += 1; vb = line.split()[0].lower()
+            if vb != "q": self.verbs[vb] = self.verbs.get(vb, 0) + 1
             try:
                 r = self._one(line)
                 if r: out.append(r)
                 else: ok += 1
             except CmdError as ex:
                 self.stats["errors"] += 1; out.append("E%d %s: %s" % (n, line.split()[0], ex))
+                key = "%s: %s" % (vb, re.sub(r"\d+", "N", str(ex)))[:90]
+                if key in self.rejects or len(self.rejects) < 200: self.rejects[key] = self.rejects.get(key, 0) + 1
             except Exception as ex:
                 self.stats["errors"] += 1; out.append("E%d %s: bad syntax (%s)" % (n, line.split()[0], type(ex).__name__))
         return "\n".join((["ok %d" % ok] if ok else []) + out) or "no commands"
@@ -756,7 +763,7 @@ class Session:
                 return "\n".join(["ECONOMY income %.1f/day, unit upkeep %.1f, city and road upkeep %.1f; roads open with: %s" % (v["income"], v["upkeep"], v["maint"], " ".join(v["access"]) or "nobody"),
                                   "building: " + (" ".join("%s P%d (%d h)" % (w[0], w[1], w[2]) for w in v["works"]) or "nothing"),
                                   "prov dev/room infra agg yield/day  next dev cost | next infra cost"] +
-                                 ["P%d %.1f/%.1f %.1f x%.2f %.1f  %s | %s" % (r["prov"], r["dev"], r["room"], r["infra"], r["agg"], r["yield_now"], r["dev_cost"], r["infra_cost"]) for r in v["provs"][:40]])
+                                 ["P%d %.1f/%.1f %.1f x%.2f %.1f  %s | %s" % (r["prov"], r["dev"], r["room"], r["infra"], r["agg"], r["yield_now"], r["dev_text"], r["infra_text"]) for r in v["provs"][:40]])
             if k in ("depots", "depot"):
                 return "\n".join(["DEPOTS prov share weight serves load/capacity output  (new one: %d res, %d h)" % (D.DEPOT_COST, D.DEPOT_HOURS)] +
                                  ["P%d %d%% w%g serves %d load %.1f/%g output x%.2f%s" % (d, round(v["share"] * 100), v["weight"], v["serves"], v["load"], v["capacity"], v["output"], " (opens in %d h)" % v["opens_in"] if v["opens_in"] else "") for d, v in self.depot_view().items()] +
@@ -969,6 +976,7 @@ class Session:
 class PolicyApi:
     """Snapshot handed to a policy's tick(api). Plain data only; orders go through api.cmd().
 
+    (tick(api) is called only when the hour is a multiple of 6, so api.t is always 0, 6, 12, ...; a test like api.t % 24 == 3 never fires)
     api.t                 tick (hours)              api.res      bank       api.mp  manpower pool
     api.costs             {type: (res cost, manpower cost)}       api.unit_costs  {type: dict(res, mp, steel, oil, rare, hours)}
     api.stock             dict(res, steel, oil, rare, coal, rubber): your stockpiles      api.income_by  dict(res (net of upkeep), steel, oil (net of fuel), rare, coal, rubber, mp) per day
@@ -989,11 +997,18 @@ class PolicyApi:
     api.season            dict(name, day, days, next_in_hours, hardy, tropic)     api.no_fuel  True while your oil stock is empty; api.fuel_per_day
                           api.provs[id] also has lat, cold (frozen now), freezes (in winter), jungle, coal, rubber
     api.offers_in         [dict(id, frm, kind 'pact'|'alliance'|'trade'|'supply', hours, they_give {what: n}, you_give {what: n}, lapses)]   answer with accept/reject <id>
+                          they_give / you_give are always seen from YOUR side, in offers_in, offers_out and deals alike: you_give is what leaves your bank.
+                          `offer <f> trade <A> for <B>` means YOU give A and get B.
     api.offers_out        [the same with `to`]         api.inbox  [dict(t, frm, text)] the last 20 letters you received
     api.owner_name        {province you know to be someone's: faction name}   whose land is where, as far as you have seen
     api.marks             {type: current model number}; a unit with u.old True is an older model (u.mark) and fights with its old values
     api.economy           dict(income, upkeep, maint, works [[kind 'dev'|'infra', province, hours left]], access [factions sharing roads with you],
-                          provs [dict(prov, dev, room, infra, agg, yield_now, base, city, dev_cost, infra_cost)] richest first)   see ECONOMY
+                          provs [dict(prov, dev, room, infra, agg, yield_now, base, city, dev_cost, infra_cost, can_dev, can_infra)] richest first)   see ECONOMY
+                          provs is a LIST of dicts and holds only your provinces with dev > 0 or infra > 0 (others: api.provs[id]). prov = province id; room = the
+                          development level up to which levels count in full (a number of levels, not a share); dev_cost / infra_cost = price of the NEXT level as a
+                          dict, e.g. {"res": 150, "coal": 24} / {"res": 60, "steel": 12}, or None at the top level; can_dev / can_infra = True if you can pay it now.
+                          works is a list of 3-item lists, e.g. [["dev", 1458, 40], ["infra", 1460, 12]]. Example: for r in api.economy["provs"]:
+                          if r["can_dev"] and r["dev"] + 1 <= r["room"]: api.cmd("develop P%d" % r["prov"])
     api.depots            {province: dict(share, weight, opens_in, serves, load, capacity, output, city)}  your depots (see DEPOTS); api.depot_cost; api.enemy_depots {province: faction} seen so far
     api.refit_cost        {type: dict(res, steel, oil, rare)}  price of `refit` per unit of that type; api.old_units = number of your units not on the current model
     api.income            net income per day        api.capital  your capital province id
