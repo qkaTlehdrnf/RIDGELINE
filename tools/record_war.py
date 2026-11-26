@@ -39,6 +39,8 @@ def main():
         new = g.battle_log[seen:]; seen = len(g.battle_log)
         side.append(dict(t=g.tick, depots=[{str(d): round(v, 2) for d, v in p.depots.items()} if p.alive else {} for p in g.players],
                          building=[sorted(p.depot_build) for p in g.players], pacts=len(g.pacts),
+                         dev=[round(sum(g.dev[i] for i in g.owned[p.id]), 1) for p in g.players], infra=[round(sum(g.infra[i] for i in g.owned[p.id]), 1) for p in g.players],
+                         income=[round(p.income) for p in g.players], access=len(g.access) // 2, deals=len(g.deals), allies=len(g.allies) // 2,
                          attacks=sum(1 for b in new if b.get("aimed", 1) > 0), won=sum(1 for b in new if b.get("aimed", 1) > 0 and b.get("won"))))
     snap()
     while not g.over:

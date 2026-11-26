@@ -84,6 +84,23 @@ class Session:
         L.append("TIME 1 tick = 1 hour, 24 = 1 day. The game runs in real time and does not wait for you.")
         L.append("MAP is a graph of provinces. Owning a province that connects to one of your depots through your own provinces "
                  "(a supply line) pays its yield every day. Cut-off provinces pay nothing.")
+        L.append("ECONOMY: every province has a development level (0-%g; cities start at %g, capitals at %g) and an infrastructure level (roads and rail, 0-%g). "
+                 "A province yields (base x (1 + %.2f x d) + %.1f x d) x agglomeration res a day and base x (1 + %.2f x d) manpower, where d is its development. "
+                 "Agglomeration = 1 + %.2f x ln(1 + market); a province's market is its own development plus its neighbours' and their neighbours', each step counted at "
+                 "%.2f + %.2f x (the lower infrastructure level of the two provinces), and only across land of one owner or of owners who have opened their roads to each other. "
+                 "A province can carry only so much development: %g + %.1f x infrastructure (%g less outside a city); each level beyond that counts %.1f. "
+                 "`develop P<id>` adds one development level (%d res and %d %s, times the level being built, %d h); `build P<id>` adds one infrastructure level (%d res and %d %s, times the level, %d h). "
+                 "Upkeep every day: %.2f x d^2 res per province and %.2f res per infrastructure level; if your treasury is empty and you cannot pay, both decay. "
+                 "Developed provinces with room also grow on their own, faster where agglomeration is higher (%.3f x (agglomeration - 1) x free room share a day). "
+                 "Infrastructure also speeds everybody's movement through the province (cost / (1 + %.1f x level)), whoever they are, shortens supply distance (a step into it counts 1/(1 + %.1f x level)) "
+                 "and lets a depot standing on it push out more (x (1 + %.2f x level)). A battle in a province wears its development down (%.3f an hour), a province taken by force keeps %d%% of its development "
+                 "and %d%% of its infrastructure, and land handed over by agreement or gained when a faction falls is undamaged. "
+                 "`offer <faction> access` proposes that the two of you open your roads to each other: supply may then pass through the partner's provinces that have infrastructure 1 or more, "
+                 "and the markets on both sides of the border count for each other. Either side ends it with `revoke <faction>` (everyone who knows you hears of it); it also ends when one takes land from the other. "
+                 "`q economy` lists your developed provinces, what is being built, upkeep, and the price of the next level; api.provs carries dev, infra, agg, yield_now, room for every province (others' as last seen)."
+                 % (D.DEV_MAX, D.DEV_START_CITY, D.DEV_START_CAPITAL, D.INFRA_MAX, D.DEV_Y, D.DEV_FLAT, D.DEV_MP, D.AGG, D.LINK, D.LINK_INFRA, D.DEV_ROOM, D.DEV_ROOM_INFRA, -D.DEV_ROOM_RURAL, D.DEV_CHOKE,
+                    D.DEV_COST, D.DEV_NEED[1], D.DEV_NEED[0], D.DEV_HOURS, D.INFRA_COST, D.INFRA_NEED[1], D.INFRA_NEED[0], D.INFRA_HOURS, D.DEV_KEEP, D.INFRA_KEEP, D.DEV_GROW,
+                    D.INFRA_MOVE, D.INFRA_HOP, D.INFRA_HUB, D.DEV_BATTLE, round(D.DEV_SACK * 100), round(D.INFRA_SACK * 100)))
         L.append("DEPOTS: a depot is where your supply starts and where your treasury (res, steel, oil, rare) is kept. You begin with one, in your capital, holding everything. "
                  "`depot P<id> [weight]` opens another in any supplied province of yours (%d res, works after %d h) or changes the weight of one you have; the treasury is "
                  "spread over your working depots in proportion to the weights, carried at %g%% of the whole per hour and only between depots joined by your own land. "
@@ -235,6 +252,8 @@ class Session:
         L.append("                         from enemy units; ends when nothing unexplored is in reach. Any unit can do it; rec is the fast one.")
         L.append(" recruit <type> [n] [P<city>]     default city: capital")
         L.append(" depot P<id> [weight]    open a depot there, or set the weight of one you have (0 = empty and close it); see DEPOTS")
+        L.append(" develop P<id> | build P<id>     raise a province's development / its infrastructure by one level (see ECONOMY); 'q economy'")
+        L.append(" offer <faction> access | revoke <faction>     open your roads to each other / close them again (see ECONOMY)")
         L.append(" research <line>         start the next level of an upgrade line (see UPGRADES); 'q tech' lists every line with what you know about it")
         L.append(" say <faction> <text> | give <faction> <n> <what> | offer <faction> pact|alliance [hours] | offer <faction> trade <n> <what>|P<id> .. for ..")
         L.append(" offer <faction> supply <n> <what> .. for <n> <what> .. [hours] | cancel <delivery id>      'q powers': what you know of every faction you met; 'q env': season and climate")
@@ -467,6 +486,18 @@ class Session:
             out[g.players[o].faction] = a
         return out
 
+    def economy_view(self):
+        """Your developed or road-built provinces (richest first), what is being built, upkeep, and who shares roads with you."""
+        g, p = self.g, self.p; rows = []
+        ct = lambda c: "%d res + %d %s" % (c[0], c[2], c[1])
+        for i in g.owned[p.id]:
+            if g.dev[i] > 0 or g.infra[i] > 0:
+                rows.append(dict(prov=i, dev=round(g.dev[i], 2), room=g.room(i), infra=round(g.infra[i], 2), agg=round(g.agg[i], 3), yield_now=round(g.prod[i], 2), base=g.provs[i].y, city=g.provs[i].city,
+                                 dev_cost=ct(g.dev_cost(i)) if g.dev[i] + 1 <= D.DEV_MAX else "top", infra_cost=ct(g.infra_cost(i)) if g.infra[i] + 1 <= D.INFRA_MAX else "top"))
+        rows.sort(key=lambda r: (-r["yield_now"], r["prov"]))
+        return dict(income=round(p.income, 1), upkeep=round(p.upkeep, 1), maint=round(p.maint, 1), works=[list(w) for w in p.works],
+                    access=sorted(g.players[b].faction for a, b in g.access if a == p.id), provs=rows)
+
     def depot_view(self):
         """Your depots: share of the treasury held, wanted weight, hours until open, provinces served, load / capacity and output factor."""
         g, p = self.g, self.p; out = {}; served = {}
@@ -594,6 +625,7 @@ class Session:
         elif verb == "offer":
             to = self._fac(toks.pop(0)); kind = toks.pop(0).lower()
             if kind in ("pact", "alliance"): err, oid = g.order_offer(pid, to, kind, hours=int(toks[0]) if toks and toks[0].isdigit() else 0)
+            elif kind == "access": err, oid = g.order_offer(pid, to, kind)
             elif kind in ("trade", "supply"):
                 give = self._amounts(toks)
                 if toks and toks[0].lower() == "for": toks.pop(0)
@@ -607,6 +639,10 @@ class Session:
             err = g.order_break(pid, self._fac(toks.pop(0)))
         elif verb == "cancel":
             err = g.order_cancel(pid, int(toks.pop(0).lstrip("#")))
+        elif verb in ("develop", "build"):
+            err = g.order_develop(pid, self._prov(toks.pop(0)), "dev" if verb == "develop" else "infra")
+        elif verb == "revoke":
+            err = g.order_revoke(pid, self._fac(toks.pop(0)))
         elif verb == "depot":
             pv = self._prov(toks.pop(0)); err = g.order_depot(pid, pv, float(toks.pop(0)) if toks else 1.0)
         elif verb == "refit":
@@ -715,6 +751,12 @@ class Session:
             if k == "army":
                 import json as _j
                 return _j.dumps(self.army_view(int(toks[0]) if toks and toks[0].isdigit() else 0), ensure_ascii=False)
+            if k in ("economy", "eco"):
+                v = self.economy_view()
+                return "\n".join(["ECONOMY income %.1f/day, unit upkeep %.1f, city and road upkeep %.1f; roads open with: %s" % (v["income"], v["upkeep"], v["maint"], " ".join(v["access"]) or "nobody"),
+                                  "building: " + (" ".join("%s P%d (%d h)" % (w[0], w[1], w[2]) for w in v["works"]) or "nothing"),
+                                  "prov dev/room infra agg yield/day  next dev cost | next infra cost"] +
+                                 ["P%d %.1f/%.1f %.1f x%.2f %.1f  %s | %s" % (r["prov"], r["dev"], r["room"], r["infra"], r["agg"], r["yield_now"], r["dev_cost"], r["infra_cost"]) for r in v["provs"][:40]])
             if k in ("depots", "depot"):
                 return "\n".join(["DEPOTS prov share weight serves load/capacity output  (new one: %d res, %d h)" % (D.DEPOT_COST, D.DEPOT_HOURS)] +
                                  ["P%d %d%% w%g serves %d load %.1f/%g output x%.2f%s" % (d, round(v["share"] * 100), v["weight"], v["serves"], v["load"], v["capacity"], v["output"], " (opens in %d h)" % v["opens_in"] if v["opens_in"] else "") for d, v in self.depot_view().items()] +
@@ -950,6 +992,8 @@ class PolicyApi:
     api.offers_out        [the same with `to`]         api.inbox  [dict(t, frm, text)] the last 20 letters you received
     api.owner_name        {province you know to be someone's: faction name}   whose land is where, as far as you have seen
     api.marks             {type: current model number}; a unit with u.old True is an older model (u.mark) and fights with its old values
+    api.economy           dict(income, upkeep, maint, works [[kind 'dev'|'infra', province, hours left]], access [factions sharing roads with you],
+                          provs [dict(prov, dev, room, infra, agg, yield_now, base, city, dev_cost, infra_cost)] richest first)   see ECONOMY
     api.depots            {province: dict(share, weight, opens_in, serves, load, capacity, output, city)}  your depots (see DEPOTS); api.depot_cost; api.enemy_depots {province: faction} seen so far
     api.refit_cost        {type: dict(res, steel, oil, rare)}  price of `refit` per unit of that type; api.old_units = number of your units not on the current model
     api.income            net income per day        api.capital  your capital province id
@@ -986,6 +1030,7 @@ class PolicyApi:
         self.owner_name = {i: g.players[o].faction for i, o in p.known_owner.items() if o >= 0 and o != p.id}
         self.marks = {c: s["mark"] for c, s in p.stats.items()}; self.refit_cost = {c: g.refit_cost(p.id, c) for c in p.stats}
         self.old_units = sum(1 for u in g.punits[p.id].values() if u.st is not p.stats[u.type])
+        self.economy = sess.economy_view(); kd = p.known_dev
         self.depots = sess.depot_view(); self.depot_cost = D.DEPOT_COST; self.enemy_depots = {d: g.players[o].faction for d, o in p.known_depots.items()}
         self.tech = sess.tech_view(); self.tech_log = [dict(x) for x in p.tech_log]; self.research = [list(r) for r in p.research]
         self.enemy_capitals = dict(p.known_caps); self.enemy_capital = sess._near_cap()
@@ -996,6 +1041,8 @@ class PolicyApi:
                                   flow=g.stock_flow(pid, pr.id),
                                   owner="me" if ko.get(pr.id, -1) == pid else "neutral" if ko.get(pr.id, -1) < 0 else "enemy",
                                   who=ko.get(pr.id, -1), visible=pr.id in p.visible, harsh=bool(pr.biome), sea=pr.sea, x=pr.cx, y0=pr.cy, steel=pr.steel, oil=pr.oil, rare=pr.rare, coal=pr.coal, rubber=pr.rubber, lat=pr.lat, cold=pr.id in g.cold, freezes=g.freezes(pr.id, 3), jungle=pr.id in g.jungle,
+                                  dev=g.dev[pr.id] if g.owner[pr.id] == pid else kd.get(pr.id, (0.0, 0.0))[0], infra=g.infra[pr.id] if g.owner[pr.id] == pid else kd.get(pr.id, (0.0, 0.0))[1],
+                                  agg=g.agg[pr.id] if g.owner[pr.id] == pid else None, yield_now=g.prod[pr.id] if g.owner[pr.id] == pid else None, room=g.room(pr.id) if g.owner[pr.id] == pid else None,
                                   supplied=pr.id in p.supplied) for pr in (g.provs[i] for i in sorted(rel)) if pr.terrain != "water"}
         self.units = [dict(id=u.id, type=u.type, prov=u.prov, str=u.str, path=list(u.path), fighting=bool(u.fighting),
                            supplied=u.supplied, group=u.group, front=u.id in sess.front or u.id in sess.expand, expand=u.id in sess.expand, explore=u.id in sess.explore, rdy=u.rdy, plan=u.plan_t, xp=u.xp, mor=u.mor, sup=u.sup, state=g.state(u), mark=u.st["mark"], old=u.st is not p.stats[u.type],

@@ -61,6 +61,7 @@ class Player:
         self.tech = {}; self.dead = set(); self.research = []; self.tech_log = []   # line -> levels done; closed lines; [line, level, hours left]; results
         self.mult = dict(res=1.0, steel=1.0, oil=1.0, rare=1.0, mp=1.0, flow=1.0, heal=1.0, plan=1.0, rest=1.0); self.mor0 = 0.0
         self._depth = {}; self._size = {}                   # HIDDEN: how far each line goes for this faction, and what each level is worth
+        self.works = []; self.maint = 0.0; self.known_dev = {}   # [kind, prov, hours left] being built; res a day spent on keeping up cities and roads; {prov: (dev, infra)} last seen
         self.fxp = {}                                # formation experience per group name (0-100): units that fight together
 
 
@@ -88,6 +89,8 @@ class Game:
         self.battles = {}; self.contacts = []
         self.assaults = {}; self.battle_log = []     # open assault episodes; finished ones (training data)
         self._sight = {}
+        self.dev = [0.0] * self.n; self.infra = [0.0] * self.n; self.access = set()    # development and infrastructure per province; ordered pairs of factions that opened their roads to each other
+        self.prod = [float(pr.y) for pr in self.provs]; self.prod_mp = [float(pr.mp) for pr in self.provs]; self.agg = [1.0] * self.n   # what each province yields now
         self.deals = {}; self.allies = set()         # standing deliveries {id: ...}; ordered pairs of allied factions
         self.pacts = {}; self.peace = set(); self.offers = {}; self.next_offer = 1; self.dip_log = []   # diplomacy: see the block of order_* below
         self._pfree = {}; self._pown = {}            # route caches: any land / own land only (cleared when borders move)
@@ -101,6 +104,10 @@ class Game:
             if bank: p.bank = {k: float(bank[p.id].get(k, 0)) for k in D.STRAT}
             la = abs(self.provs[p.capital].lat); p.hardy = la >= D.HARDY_LAT or self.provs[p.capital].biome == "tundra"; p.tropic = la < D.TROPIC_LAT or not getattr(m, "world", False)
             self.hide_tech(p, seed * 9973 + p.id * 101 + 17)
+        for i, pr in enumerate(self.provs):
+            if pr.city: self.dev[i] = D.DEV_START_CITY
+        for p in self.players: self.dev[p.capital] = D.DEV_START_CAPITAL
+        self._wealth()
         r = random.Random(seed * 31 + 5)
         for p in self.players:
             for (t, at) in m.start_units[p.id]:
@@ -167,6 +174,8 @@ class Game:
         self.owner[q] = new
         for o in (old, new):
             if o >= 0: self.sdirty[o] = True; self.vdirty[o] = True; self.ownvis[o] = None
+        for a, b in self.access:
+            if a == old or a == new: self.sdirty[b] = True
         if old >= 0: self.owned[old].discard(q)
         if new >= 0: self.owned[new].add(q)
         self._pown.clear()
@@ -213,7 +222,7 @@ class Game:
 
     def move_cost(self, u, prov):
         pr = self.provs[prov]
-        return pr.cost / u.st["spd"] * (u.st["climb"] if pr.terrain in D.HIGH else 1.0) * (D.COLD_MOVE if prov in self.cold else 1.0)
+        return pr.cost / u.st["spd"] * (u.st["climb"] if pr.terrain in D.HIGH else 1.0) * (D.COLD_MOVE if prov in self.cold else 1.0) / (1.0 + D.INFRA_MOVE * self.infra[prov])
 
     def season_at(self, tick, lat=1.0):
         """Index into D.SEASONS for a latitude at a game hour (the south has the opposite season)."""
@@ -478,7 +487,8 @@ class Game:
         kind 'trade': a one-off swap, give {resource: amount} for want {resource: amount}. Returns (error, offer id)."""
         e = self._deal_check(pid, to)
         if e: return e, None
-        if kind not in ("pact", "alliance", "trade", "supply"): return "offer what? pact, alliance, trade or supply", None
+        if kind not in ("pact", "alliance", "trade", "supply", "access"): return "offer what? pact, alliance, trade, supply or access", None
+        if kind == "access" and (pid, to) in self.access: return "your roads are already open to each other", None
         key = (min(pid, to), max(pid, to))
         if kind == "alliance" and self.pacts.get(key, {}).get("ally") and self.pacts[key]["ends"] is None: return "you are already allied", None
         if kind in ("trade", "supply"):
@@ -507,6 +517,7 @@ class Game:
 
     def offer_text(self, o):
         if o["kind"] in ("pact", "alliance"): return "%s, %s" % (o["kind"], "%d h" % o["hours"] if o["hours"] else "until broken")
+        if o["kind"] == "access": return "access: each may use the other's roads for supply, and your markets join across the border, until one of you revokes it"
         f = lambda d: " ".join((k if k.startswith("P") else "%d %s" % (v, k)) for k, v in sorted(d.items())) or "nothing"
         if o["kind"] == "supply": return "supply every day, they give %s, you give %s, %s" % (f(o["give"]), f(o["want"]), "%d h" % o["hours"] if o["hours"] else "until cancelled")
         return "trade, they give %s, you give %s" % (f(o["give"]), f(o["want"]))
@@ -538,6 +549,8 @@ class Game:
                     else: self._res_add(x, k, -v); self._res_add(y, k, v)
             if land and key not in self.pacts:                # time to march out: a short truce comes with any land that changes hands by agreement
                 self.pacts[key] = dict(since=self.tick, until=self.tick + D.TRUCE_HOURS, ends=None, by=None, truce=True); self._peace()
+        elif o["kind"] == "access":
+            self.access.add((a.id, b.id)); self.access.add((b.id, a.id)); self.sdirty[a.id] = True; self.sdirty[b.id] = True
         elif o["kind"] == "supply":
             self.deals[oid] = dict(id=oid, a=a.id, b=b.id, give=dict(o["give"]), want=dict(o["want"]), since=self.tick, until=self.tick + o["hours"] if o["hours"] else None)
         else:
@@ -654,16 +667,121 @@ class Game:
         self._diplomacy(); self._economy(); self._combat(); self._hourly(); self._move(); self._capture()
         self._close_assaults(); self._supply(); self._vision(); self._check_end()
 
+    # ---------------------------------------------------------------- economy: cities, roads, markets
+    def room(self, prov):
+        """Development a province can carry before it chokes on its own traffic."""
+        return max(0.0, D.DEV_ROOM + D.DEV_ROOM_INFRA * self.infra[prov] + (0.0 if self.provs[prov].city else D.DEV_ROOM_RURAL))
+
+    def dev_eff(self, prov):
+        d = self.dev[prov]; r = self.room(prov)
+        return d if d <= r else r + (d - r) * D.DEV_CHOKE
+
+    def linked(self, a, b):
+        oa = self.owner[a]; ob = self.owner[b]
+        return oa >= 0 and (oa == ob or (oa, ob) in self.access)
+
+    def market(self, prov):
+        """Developed mass within reach: its own, plus its neighbours' and their neighbours', each step weakened by how poor the roads between them are.
+        Only land of the same owner counts, or of an owner who has opened its roads to this one."""
+        dev = self.dev; infra = self.infra; provs = self.provs; m = self.dev_eff(prov); L0 = D.LINK; L1 = D.LINK_INFRA
+        if self.owner[prov] < 0: return m
+        for b in provs[prov].nbrs:
+            if not self.linked(prov, b): continue
+            l = L0 + L1 * min(infra[prov], infra[b]); m += l * dev[b]
+            for c in provs[b].nbrs:
+                if c != prov and dev[c] > 0 and self.linked(b, c): m += l * (L0 + L1 * min(infra[b], infra[c])) * dev[c]
+        return m
+
+    def _wealth(self):
+        """What every province yields now (once a day and when something was built)."""
+        for i, pr in enumerate(self.provs):
+            if pr.terrain == "water": continue
+            d = self.dev_eff(i)
+            if d <= 0 and self.infra[i] <= 0:
+                near = any(self.dev[b] > 0 for b in pr.nbrs)
+                if not near: self.agg[i] = 1.0; self.prod[i] = float(pr.y); self.prod_mp[i] = float(pr.mp); continue
+            a = self.agg[i] = 1.0 + D.AGG * math.log(1.0 + self.market(i))
+            self.prod[i] = (pr.y * (1.0 + D.DEV_Y * d) + D.DEV_FLAT * d) * a; self.prod_mp[i] = pr.mp * (1.0 + D.DEV_MP * d)
+
+    def _econ_day(self):
+        """Once a day: cities grow where the market is good and there is room, upkeep is charged, and what cannot be kept up decays."""
+        dev = self.dev; infra = self.infra; fought = set(self.battles)
+        for p in self.players:
+            if not p.alive: p.maint = 0.0; continue
+            m = 0.0; broke = p.res <= 0.0 and p.income < p.upkeep + p.maint
+            for i in self.owned[p.id]:
+                d = dev[i]; L = infra[i]
+                if d <= 0 and L <= 0: continue
+                if broke:
+                    dev[i] = d = max(0.0, d - D.DEV_DECAY); infra[i] = L = max(0.0, L - D.DEV_DECAY)
+                elif d > 0 and i in fought: dev[i] = d = max(0.0, d - D.DEV_BATTLE * 24)
+                elif d > 0 and i in p.supplied and i not in fought:
+                    r = self.room(i)
+                    if d < r: dev[i] = d = min(D.DEV_MAX, d + D.DEV_GROW * (self.agg[i] - 1.0) * (1.0 - d / r))
+                m += D.DEV_KEEP * d * d + D.INFRA_KEEP * L
+            p.maint = m
+        self._wealth()
+
+    def _roads(self, prov):
+        """Roads changed here: routes and supply distances have to be worked out again."""
+        self._pfree.clear(); self._pown.clear(); o = self.owner[prov]
+        if o >= 0:
+            self.sdirty[o] = True
+            for a, b in self.access:
+                if a == o: self.sdirty[b] = True
+
+    def dev_cost(self, prov):
+        """(res, resource, amount) for the next level of development here."""
+        k = int(self.dev[prov]) + 1; return D.DEV_COST * k, D.DEV_NEED[0], D.DEV_NEED[1] * k
+
+    def infra_cost(self, prov):
+        k = int(self.infra[prov]) + 1; return D.INFRA_COST * k, D.INFRA_NEED[0], D.INFRA_NEED[1] * k
+
+    def order_develop(self, pid, prov, kind="dev"):
+        """Invest in a province of yours: kind 'dev' raises its development by one level, 'infra' its roads and rail."""
+        p = self.players[pid]
+        if not (0 <= prov < self.n) or self.owner[prov] != pid: return "P%d is not yours" % prov
+        if prov not in p.supplied: return "P%d is cut off from your depots" % prov
+        if any(w[0] == kind and w[1] == prov for w in p.works): return "already building that at P%d" % prov
+        cur = self.dev[prov] if kind == "dev" else self.infra[prov]; top = D.DEV_MAX if kind == "dev" else D.INFRA_MAX
+        if cur + 1.0 > top + 1e-9: return "P%d is already at the top level" % prov
+        res, k, n = self.dev_cost(prov) if kind == "dev" else self.infra_cost(prov)
+        if p.res < res: return "need %d res (have %d)" % (res, p.res)
+        if p.bank[k] < n: return "need %d %s (have %d)" % (n, k, p.bank[k])
+        p.res -= res; p.bank[k] -= n; p.works.append([kind, prov, D.DEV_HOURS if kind == "dev" else D.INFRA_HOURS]); return None
+
+    def order_revoke(self, pid, to):
+        """Close your roads to a faction you had opened them to (and theirs to you). Everyone who knows you hears of it."""
+        if (pid, to) not in self.access: return "you have no access agreement with them"
+        self._access_end(pid, to); a = self.players[pid]; b = self.players[to]
+        self.event(to, "deal", "%s CLOSED its roads to you" % a.faction)
+        for q in self.players:
+            if q.alive and q.id not in (pid, to) and pid in self.met(q.id): self.event(q.id, "news", "%s closed its roads to %s" % (a.faction, b.faction))
+        self._dip("revoke", pid, to); return None
+
+    def _access_end(self, a, b):
+        self.access.discard((a, b)); self.access.discard((b, a)); self.sdirty[a] = True; self.sdirty[b] = True
+
     def _economy(self):
         provs = self.provs
+        if self.tick % 24 == 0: self._econ_day()
         for p in self.players:
             if not p.alive: continue
-            y = mp = 0; dep = dict.fromkeys(D.STRAT, 0)
+            y = mp = 0; dep = dict.fromkeys(D.STRAT, 0); prod = self.prod; pmp = self.prod_mp
             for i in p.supplied:
-                pr = provs[i]; y += pr.y; mp += pr.mp
+                pr = provs[i]; y += prod[i]; mp += pmp[i]
                 for k in D.STRAT: dep[k] += getattr(pr, k)
             m = p.mult; p.income = y * m["res"]; p.mp_income = mp * m["mp"]
-            p.res = max(0.0, p.res + (p.income - p.upkeep) / 24.0); p.mp += p.mp_income / 24.0
+            p.res = max(0.0, p.res + (p.income - p.upkeep - p.maint) / 24.0); p.mp += p.mp_income / 24.0
+            for w in list(p.works):
+                w[2] -= 1
+                if w[2] <= 0:
+                    p.works.remove(w); i = w[1]
+                    if self.owner[i] != p.id: continue
+                    if w[0] == "dev": self.dev[i] = min(D.DEV_MAX, self.dev[i] + 1.0)
+                    else:
+                        self.infra[i] = min(D.INFRA_MAX, self.infra[i] + 1.0); self._roads(i)
+                    self.event(p.id, "built", "%s at P%d is now %.1f" % ("development" if w[0] == "dev" else "infrastructure", i, self.dev[i] if w[0] == "dev" else self.infra[i]))
             inc = p.inc; b = p.bank
             for k in D.STRAT: inc[k] = dep[k] * m.get(k, 1.0); b[k] += inc[k] / 24.0
             if self.tick % 24 == 0: p.fuel = sum(D.FUEL.get(u.type, 0.0) for u in self.punits[p.id].values())
@@ -1042,6 +1160,9 @@ class Game:
             old = self.owner[q]; self._set_owner(q, side)
             self.fort[q] = float(self.fort_level(q) // 2)        # captured works are half wrecked
             self.stock[q] *= 0.25                                # most of the depot is burnt or carried off
+            if self.dev[q] > 0 or self.infra[q] > 0:             # a city taken by force is a damaged city
+                self.dev[q] *= D.DEV_SACK; self.infra[q] *= D.INFRA_SACK; self._roads(q)
+            if old >= 0 and (side, old) in self.access: self._access_end(side, old)
             self.event(side, "took", "P%d" % q)
             if old >= 0:
                 self.event(old, "lostprov", "P%d" % q)
@@ -1064,23 +1185,30 @@ class Game:
             if not self.sdirty[p.id]: continue
             self.sdirty[p.id] = False
             s = set()
-            hp = {}; hub = {}; q = []
+            hp = {}; hub = {}; q = []; dist = {}; infra = self.infra; owner = self.owner; acc = set(b for a, b in self.access if a == p.id); IH = D.INFRA_HOP
             for d in sorted(p.depots):                           # supply spreads from every working depot at once: each province draws on the nearest
-                if self.owner[d] == p.id and d not in p.depot_build: s.add(d); q.append(d); hp[d] = 0; hub[d] = d
-            i = 0; link = {}
-            while i < len(q):
-                a = q[i]; i += 1
+                if owner[d] == p.id and d not in p.depot_build: dist[d] = 0.0; hub[d] = d; heapq.heappush(q, (0.0, d, d))
+            link = {}; done = set()
+            while q:                                             # good roads shorten the way; a partner who opened its roads lets supply pass over them
+                da, a, h = heapq.heappop(q)
+                if a in done: continue
+                done.add(a); hub[a] = h
+                if owner[a] == p.id: s.add(a); hp[a] = da
                 for b in self.provs[a].nbrs:
-                    if self.owner[b] != p.id: continue
-                    if b not in s:
-                        sea = b in self.provs[a].sea
-                        if sea and (b in self.cold or a in self.cold): continue          # no shipping into the ice
-                        s.add(b); q.append(b); hp[b] = hp[a] + (D.SEA_HOPS if sea else 1); hub[b] = hub[a]
-                    elif hub[b] != hub[a]: link.setdefault(hub[a], set()).add(hub[b])
+                    ob = owner[b]
+                    if ob != p.id and not (ob in acc and infra[b] >= 1.0): continue
+                    if b in done:
+                        if hub[b] != h and ob == p.id and owner[a] == p.id: link.setdefault(h, set()).add(hub[b])
+                        continue
+                    sea = b in self.provs[a].sea
+                    if sea and (b in self.cold or a in self.cold): continue          # no shipping into the ice
+                    nd = da + (D.SEA_HOPS if sea else 1.0) / (1.0 + IH * infra[b])
+                    if nd < dist.get(b, 1e18): dist[b] = nd; heapq.heappush(q, (nd, b, h))
+            hub = {b: hub[b] for b in hp}
             self.hops[p.id] = hp; self.hub[p.id] = hub; ld = {}
             for b, h in hp.items(): ld[hub[b]] = ld.get(hub[b], 0.0) + (0.5 if self.provs[b].biome else 1.0) / (1.0 + self.stock_hop * h)
             self.load[p.id] = ld                                 # a depot can only push so much: beyond its capacity everything it serves gets proportionally less
-            self.throttle[p.id] = {d: min(1.0, (D.HUB_LOAD_CITY if self.provs[d].city else D.HUB_LOAD) / max(1e-9, v)) for d, v in ld.items()}
+            self.throttle[p.id] = {d: min(1.0, (D.HUB_LOAD_CITY if self.provs[d].city else D.HUB_LOAD) * (1.0 + D.INFRA_HUB * self.infra[d]) / max(1e-9, v)) for d, v in ld.items()}
             p._links = link
             cut = [i for i in p.supplied if i not in s and self.owner[i] == p.id]
             if cut: self.event(p.id, "cut", "supply cut to %d province(s) incl. %s" % (len(cut), ",".join("P%d" % i for i in sorted(cut)[:4])))
@@ -1116,7 +1244,10 @@ class Game:
                 if a == p.id: vis |= self.players[b].visible
             p.visible = vis; p.explored |= vis
             ko = p.known_owner; kf = p.known_fort; owner = self.owner
-            for i in vis: ko[i] = owner[i]; kf[i] = self.fort_level(i)
+            kd = p.known_dev; dev = self.dev; infra = self.infra
+            for i in vis:
+                ko[i] = owner[i]; kf[i] = self.fort_level(i)
+                if dev[i] > 0 or infra[i] > 0 or i in kd: kd[i] = (dev[i], infra[i])
             for e in self.players:
                 if e.id != p.id and e.alive:
                     for d in e.depots:

@@ -264,3 +264,21 @@ JUNGLE_LAT = 15.0       # forest within this latitude is jungle
 FEVER = 0.06            # strength lost per hour in jungle by units of factions from outside the tropics (capital beyond TROPIC_LAT) off their own supplied land; divided by the medicine multiplier
 TROPIC_LAT = 23.5
 SEA_HOPS = 4            # a sea link counts as this many steps for supply (shipping), and supplies do not cross it at all into a frozen harbour
+
+
+# ---- economy (v9): cities grow, wealth follows how developed and how well connected a region is -------------------------
+DEV_MAX = 6.0; INFRA_MAX = 3.0
+DEV_COST = 50; DEV_NEED = ("coal", 8); DEV_HOURS = 72       # one more level of development: cost and need are multiplied by the level being built
+INFRA_COST = 30; INFRA_NEED = ("steel", 6); INFRA_HOURS = 48  # one more level of roads and rail, likewise
+DEV_START_CITY = 1.0; DEV_START_CAPITAL = 2.0
+DEV_Y = 0.30; DEV_FLAT = 0.8; DEV_MP = 0.15                 # yield = (base * (1 + DEV_Y * d) + DEV_FLAT * d) * agglomeration; manpower * (1 + DEV_MP * d)
+DEV_ROOM = 2.0; DEV_ROOM_INFRA = 1.5; DEV_ROOM_RURAL = -1.0  # development a province can carry before it chokes: ROOM + ROOM_INFRA * infrastructure (a non-city has ROOM_RURAL less)
+DEV_CHOKE = 0.3                                             # what each level beyond that room is still worth
+AGG = 0.18                                                  # agglomeration = 1 + AGG * ln(1 + market)
+LINK = 0.15; LINK_INFRA = 0.25                              # how much of a neighbour's development counts towards your market: LINK + LINK_INFRA * min(infrastructure of the two)
+DEV_KEEP = 0.12; INFRA_KEEP = 0.15                          # res a day: DEV_KEEP * d^2 per province, INFRA_KEEP per infrastructure level
+DEV_GROW = 0.02                                             # organic growth a day = DEV_GROW * (agglomeration - 1) * free room share
+DEV_DECAY = 0.01                                            # lost a day when the upkeep cannot be paid
+DEV_SACK = 0.6; INFRA_SACK = 0.75                           # what is left after a province is taken by force
+DEV_BATTLE = 0.004                                          # development lost per hour while a battle is fought in the province
+INFRA_MOVE = 0.2; INFRA_HOP = 0.5; INFRA_HUB = 0.25         # movement cost / (1 + MOVE * L); supply distance of a province / (1 + HOP * L); depot capacity * (1 + HUB * L)

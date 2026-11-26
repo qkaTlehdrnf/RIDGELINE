@@ -44,6 +44,10 @@ def belief_game(sess):
     g.stock = [g0.stock[i] if g.owner[i] == pid else (100.0 if g.owner[i] >= 0 else 0.0) for i in range(g.n)]
     g.fort = [(g0.fort[i] if g.owner[i] == pid else float(p0.known_fort.get(i, 0))) for i in range(g.n)]
     g.cold = set(g0.cold); g.jungle = g0.jungle; g.deals = {}; g.allies = set()
+    kd = p0.known_dev                              # cities and roads: its own exactly, others' as last seen
+    g.dev = [(g0.dev[i] if g.owner[i] == pid else kd.get(i, (0.0, 0.0))[0]) for i in range(g.n)]
+    g.infra = [(g0.infra[i] if g.owner[i] == pid else kd.get(i, (0.0, 0.0))[1]) for i in range(g.n)]
+    g.access = set(k for k in g0.access if pid in k); g.prod = [float(pr.y) for pr in g.provs]; g.prod_mp = [float(pr.mp) for pr in g.provs]; g.agg = [1.0] * g.n
     g.hops = [{} for _ in g0.players]; g.hub = [{} for _ in g0.players]; g.throttle = [{} for _ in g0.players]; g.load = [{} for _ in g0.players]
     g.units = {}; g.next_id = g0.next_id; g.pos = [[] for _ in range(g.n)]
     g.battles = {}; g.contacts = []; g.assaults = {}; g.battle_log = []
@@ -57,6 +61,7 @@ def belief_game(sess):
         if q0.id == pid:
             q.capital = q0.capital; q.depots = dict(q0.depots); q.depot_want = dict(q0.depot_want); q.depot_build = dict(q0.depot_build); q.known_depots = dict(p0.known_depots); q.res = q0.res; q.mp = q0.mp; q.queue = [list(x) for x in q0.queue]
             q.marks = {c: [dict(st) for st in v] for c, v in q0.marks.items()}; q.stats = {c: v[-1] for c, v in q.marks.items()}; q.bank = dict(q0.bank); q.mult = dict(q0.mult); q.mor0 = q0.mor0
+            q.works = [list(w) for w in q0.works]; q.maint = q0.maint
             q.tech = dict(q0.tech); q.dead = set(q0.dead); q.research = [list(r) for r in q0.research]; q.tech_log = list(q0.tech_log)
         else:
             held = [i for i in range(g.n) if g.owner[i] == q0.id]
@@ -70,6 +75,7 @@ def belief_game(sess):
         g.players.append(q)
     g.pacts = {k: dict(v) for k, v in g0.pacts.items() if pid in k}; g._peace()      # only the commander's own pacts are known to it
     twin = {}; g._index(); g._own_dirty = True
+    g._wealth()
     me = g.players[pid]; me.fxp = dict(p0.fxp)
     for u0 in g0.punits[pid].values():
         u = Unit(u0.id, pid, u0.type, me.marks[u0.type][u0.st["mark"] - 1], u0.prov)        # the copy's own stats table: research in the forecast must not touch the real one

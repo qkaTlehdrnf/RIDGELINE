@@ -1,6 +1,7 @@
 """Run: python tests/test_core.py"""
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from ridgeline import data as D
 from ridgeline.engine import Game, small_game
 from ridgeline.iface import Session, PolicyApi
 from ridgeline.match import run_match
@@ -23,19 +24,19 @@ def test_territory_income_and_supply():
     for u in list(g.units.values()): g._die(u, None)
     own = [i for i in range(g.n) if g.owner[i] == 0]
     g.step(); base = p.income
-    assert base == sum(g.provs[i].y for i in own) and base > 0, "income = yield of supplied provinces"
+    assert abs(base - sum(g.prod[i] for i in own)) < 1e-6 and base > 0, "income = yield of supplied provinces"
     # walk a unit into a neutral neighbour: income rises
     cap = p.capital; tgt = next(b for i in own for b in g.provs[i].nbrs if g.owner[b] == -1)
     src = next(i for i in own if tgt in g.provs[i].nbrs)
     u = g.spawn(0, "inf", src); g.order_move(0, [u.id], tgt)
     for _ in range(80): g.step()
-    assert g.owner[tgt] == 0 and p.income == base + g.provs[tgt].y
+    assert g.owner[tgt] == 0 and p.income > base - 1e-6 and abs(p.income - sum(g.prod[i] for i in p.supplied)) < 1e-6
     # cut it off: give every province between it and the capital to nobody
     for i in own:
         if i != cap: g.owner[i] = -1
     g._own_dirty = True; g.step(); g.step()
     if cap not in g.provs[tgt].nbrs:
-        assert tgt not in p.supplied and p.income == g.provs[cap].y, "cut-off provinces pay nothing"
+        assert tgt not in p.supplied and abs(p.income - g.prod[cap]) < 1e-6, "cut-off provinces pay nothing"
         s0 = u.str
         for _ in range(10): g.step()
         if not any(b in p.supplied for b in g.provs[u.prov].nbrs): assert u.str < s0, "out-of-supply attrition"
@@ -453,6 +454,42 @@ def test_depots_are_the_factions_choice():
     # an open-ended pact is possible again: how long peace lasts is the factions' choice
     g.players[0].met.add(1); g.players[1].met.add(0)
     e, oid = g.order_offer(0, 1, "pact"); assert e is None and g.offers[oid]["hours"] == 0
+
+
+def test_v9_cities_roads_and_access():
+    g = small_game(5); p = g.players[0]; q = g.players[1]; cap = p.capital
+    for u in list(g.units.values()): g._die(u, None)
+    p.res = 5000; p.bank["coal"] = 500; p.bank["steel"] = 500; g.step()
+    y0 = g.prod[cap]; d0 = g.dev[cap]
+    assert d0 == D.DEV_START_CAPITAL and y0 > g.provs[cap].y, "a capital starts developed and yields more than bare land"
+    assert g.order_develop(0, cap) is None and g.order_develop(0, cap) is not None, "one work of a kind per province at a time"
+    for _ in range(D.DEV_HOURS + 24): g.step()
+    assert g.dev[cap] >= d0 + 1 and g.prod[cap] > y0 and p.maint > 0, "development raises yield and costs upkeep"
+    # choke: pile development on a province without roads and each level is worth less
+    g.dev[cap] = 6.0; g._wealth(); choked = g.prod[cap]; g.infra[cap] = 3.0; g._wealth()
+    assert g.prod[cap] > choked * 1.2 and g.room(cap) > 6.0, "roads make room for a big city"
+    # roads shorten supply and movement, for anyone
+    nb = next(b for b in g.provs[cap].nbrs if g.owner[b] == 0); u = g.spawn(0, "inf", cap); c0 = g.move_cost(u, nb); h0 = g.hops[0][nb]
+    assert g.order_develop(0, nb, "infra") is None
+    for _ in range(D.INFRA_HOURS + 2): g.step()
+    assert g.infra[nb] == 1.0 and g.move_cost(u, nb) < c0 and g.hops[0][nb] < h0
+    # a neighbour's market counts only once the two open their roads
+    g.met(0); p.met.add(1); q.met.add(0)
+    edge = next((a, b) for a in g.owned[0] for b in g.provs[a].nbrs if g.owner[b] == 1) if any(g.owner[b] == 1 for a in g.owned[0] for b in g.provs[a].nbrs) else None
+    if edge is None:                                         # make the two touch
+        a = next(i for i in g.owned[0] if i != cap); b = next(x for x in g.provs[a].nbrs if x != cap); g._set_owner(b, 1); edge = (a, b)
+    a, b = edge; g.dev[b] = 4.0; m0 = g.market(a)
+    e, oid = g.order_offer(0, 1, "access"); assert e is None and g.order_answer(1, oid, True) is None and (0, 1) in g.access
+    assert g.market(a) > m0, "the partner's city is now part of this province's market"
+    assert g.order_revoke(1, 0) is None and (0, 1) not in g.access and abs(g.market(a) - m0) < 1e-9
+    # a city taken by force is damaged
+    g.dev[b] = 4.0; g.infra[b] = 2.0
+    for x in list(g.pos[b]): g._die(x, None)
+    w = g.spawn(0, "inf", a); g.order_move(0, [w.id], b)
+    for _ in range(200):
+        g.step()
+        if g.owner[b] == 0: break
+    assert g.owner[b] == 0 and g.dev[b] < 4.0 * D.DEV_SACK + 0.2 and g.infra[b] <= 2.0 * D.INFRA_SACK + 1e-6
 
 
 def test_v8_resources_relations_and_climate():
