@@ -937,7 +937,9 @@ class Game:
 
     def _economy(self):
         provs = self.provs
-        if self.tick % 24 == 0: self._econ_day()
+        if self.tick % 24 == 0:
+            self._econ_day()
+            if self.ages: A.leak(self)
         for p in self.players:
             if not p.alive: continue
             y = mp = 0; dep = dict.fromkeys(D.STRAT, 0); prod = self.prod; pmp = self.prod_mp
@@ -1231,7 +1233,7 @@ class Game:
                     h = t.st["hard"]; td = t.st["dom"]; tdf = t.st["dfn"]
                     if h: pw *= 1.0 + h * ap1                          # armour shrugs off soft weapons; anti-tank weapons tear it open
                     if ux or td or tp >= S0:
-                        if td == 0 and tp >= S0: td = 1; tdf = D.AT_SEA_DFN
+                        if td == 0 and tp >= S0: td = 1; tdf = t.st["dfn"] * D.AT_SEA_DFN
                         pw *= st["va"] if td == 2 else st["vs"] if td == 1 else st["vg"]
                         if td == 0 and ux and (u.owner, t.owner) not in self._warm: self._warm.add((u.owner, t.owner)); self.set_war(u.owner, t.owner)
                     if not t.path and not td and tp < S0:                                   # standing: cover from terrain, and from the fort at home
@@ -1244,7 +1246,7 @@ class Game:
                     if t.fighting == 0:
                         t.fighting = 2 if not t.path else 1
                         if not t.contact: t.contact = True; hot_units.append(t); act.add(t.id)
-                    hit = pw * D.DMG_K * 14.0 / max(1.5, tdf) / (D.XP_DFN0 + D.XP_DFN * t.xp / 100.0)     # veterans use the ground better
+                    hit = pw * D.DMG_K * 14.0 / max(0.05, tdf) / (D.XP_DFN0 + D.XP_DFN * t.xp / 100.0)     # veterans use the ground better
                     dmg[tid] = dmg.get(tid, 0.0) + hit; kby[tid] = u
                     t.sup = min(100.0, t.sup + hit * D.SUP_K * heavy)
                     if u.prov != t.prov: con.add((min(u.prov, t.prov), max(u.prov, t.prov)))

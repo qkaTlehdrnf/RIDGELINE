@@ -16,8 +16,8 @@ from . import data as D
 ERAS = ("ancient", "medieval", "gunpowder", "industrial", "great-war", "modern", "space")
 ERA_YEAR = (0, 600, 1400, 1780, 1900, 1940, 1960)          # roughly when each age began in our own history (for the reader only)
 CAL_HOURS = 9216; CAL_YEARS = 2000
-POW = (0.30, 0.38, 0.48, 0.62, 0.80, 1.00, 1.20)           # nominal attack and defence of a model of that age (x the table in data.py)
-RNG = (0.50, 0.50, 0.60, 0.80, 1.00, 1.00, 1.10)           # range likewise (never below 1.5 cells)
+POW = (0.06, 0.09, 0.15, 0.30, 0.60, 1.00, 1.50)           # nominal attack and defence of a model of that age (x the table in data.py)
+RNG = (0.30, 0.30, 0.45, 0.70, 1.00, 1.00, 1.15)           # range likewise (never below 1.5 cells)
 STEEL = (0.0, 0.3, 0.5, 0.8, 1.0, 1.0, 1.2)                # share of the table's steel a model of that age needs
 QUALITY = (0.85, 1.20)                                     # HIDDEN factor per faction, kind and model
 HOURS = (120, 200, 280, 360, 440, 520, 600)                # research time of a discovery of that age
@@ -26,6 +26,7 @@ NEEDS = ((), (("steel", 20),), (("steel", 40),), (("steel", 60), ("coal", 60)), 
          (("steel", 100), ("oil", 120), ("rubber", 60), ("rare", 20)), (("steel", 120), ("oil", 140), ("rubber", 60), ("rare", 60)))   # ... and what else
 MARKET = 8                             # res per unit of a strategic resource you lack when you start a discovery (bought abroad; discoveries only)
 DIFFUSE = 0.10; DIFFUSE_MAX = 0.5      # a discovery is this much cheaper for every faction you have met that already has it
+LEAK_AFTER = 768; LEAK_EVERY = 96       # hours a met faction must have had a discovery before it seeps to you unpaid; at most one such arrival per this many hours
 START = dict(inf="spearmen", mil="levy", rec="runners")     # what everyone has in the year 0
 
 # name: (age, needs these first, [(kind, model name)], other effect or None, a word on what it is)
@@ -127,7 +128,7 @@ def model(p, code, g):
 
 def setup(game, p, rng):
     """Put player p in the year 0."""
-    p.base = p.stats; p.known = set(); p.gen = {}; p.lmul = {}; p.gmul = dict(dig=1.0, cost=1.0); p.gadd = dict(xp0=0)
+    p.base = p.stats; p.known = set(); p.known_t = {}; p.leak_t = -10 ** 9; p.gen = {}; p.lmul = {}; p.gmul = dict(dig=1.0, cost=1.0); p.gadd = dict(xp0=0)
     p.fort_cap = 1; p.sail = 0.0; p.sea_reach = 0; p.ocean = False; p.sat = False; p.missile = False; p.aa = False
     p._q = {(c, g): round(rng.uniform(*QUALITY), 3) for c, gs in GENS.items() for g in range(len(gs))}
     p.stats = {}; p.marks = {}
@@ -155,7 +156,7 @@ def era_of(p):
 
 def finish(game, p, name):
     """The discovery is made. Returns the text of what it brought."""
-    e, req, unlocks, fx, word = TREE[name]; p.known.add(name); out = []
+    e, req, unlocks, fx, word = TREE[name]; p.known.add(name); p.known_t[name] = game.tick; out = []
     for code, label in unlocks:
         g = [i for i, x in enumerate(GENS[code]) if x[0] == name][0]
         if p.gen.get(code, -1) >= g: continue
@@ -181,3 +182,21 @@ def finish(game, p, name):
             if c in p.stats: p.stats[c]["va"] = max(p.stats[c]["va"], 0.15)
     game._pfree.clear(); game._pown.clear(); game.sdirty[p.id] = True; game.vdirty[p.id] = True; game._seadirty = True
     return "%s (%s age): %s" % (name, ERAS[e], "; ".join(out) or word)
+
+
+def leak(game):
+    """Once a day: what the peoples you have met have long known reaches you without payment (prerequisites first, one at a time)."""
+    t = game.tick; ps = game.players
+    for p in ps:
+        if not p.alive or not hasattr(p, "known_t") or t - p.leak_t < LEAK_EVERY: continue
+        met = [ps[q] for q in game.met(p.id) if q != p.id and hasattr(ps[q], "known_t")]
+        if not met: continue
+        busy = set(r[0] for r in p.research); best = None
+        for name, v in TREE.items():
+            if name in p.known or name in busy or any(r not in p.known for r in v[1]): continue
+            if any(t - q.known_t.get(name, t) >= LEAK_AFTER for q in met):
+                if best is None or (v[0], name) < best: best = (v[0], name)
+        if best:
+            p.leak_t = t; text = finish(game, p, best[1])
+            p.tech_log.append(dict(t=t, line=best[1], level=0, ok=True, gain=0.0, text=text, leak=True))
+            game.event(p.id, "tech", "learned from abroad, unpaid: " + text)

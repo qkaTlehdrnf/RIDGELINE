@@ -290,7 +290,7 @@ class Session:
         L.append("AGES: everyone starts in the ancient world. You can raise only %s. Every other kind of unit, bigger forts, ships, aircraft, missiles and satellites must be DISCOVERED, "
                  "in the order the tree below allows: `research <discovery>` (uses one of your %d research slots; res cost and hours by age: %s; from the %s age on also strategic resources: %s). "
                  "Strategic resources a discovery needs and you do not have are bought abroad at %d res each, automatically (for discoveries only, not for units or upgrades). "
-                 "A discovery that a faction you have met already has is %d%% cheaper for you for each such faction (up to %d%%); 'q tree' and api.tree show your price now. "
+                 "A discovery that a faction you have met already has is %d%% cheaper for you for each such faction (up to %d%%); 'q tree' and api.tree show your price now. What a faction you have met has had for %d hours or more also reaches you unpaid in the end: at most one such discovery per %d hours, prerequisites first (it arrives as a 'tech' event; your units still need `refit`). The nominal power below means that a model two or three ages ahead destroys older ones at almost no loss. "
                  "A discovery OPENS a kind of unit, or gives a kind a NEW MODEL, or changes what you can do. A model's attack and defence are the unit table's values (which describe the newest "
                  "model of all) times the nominal power of its age (%s; a second model inside one age x1.12), its range times %s (never under 1.5), and it needs steel only from the medieval age, oil only from the great-war age. "
                  "WHAT NOBODY KNOWS BEFOREHAND: your own version of a model is its nominal power times a hidden factor between %.2f and %.2f, drawn separately for you, for every kind and model, in this war. "
@@ -299,7 +299,7 @@ class Session:
                  % ((", ".join("%s (%s)" % (c, n) for c, n in A.START.items()), D.TECH_SLOTS,
                     "; ".join("%s %d res %d h" % (A.ERAS[e], A.COST[e], A.HOURS[e]) for e in range(len(A.ERAS))), A.ERAS[1],
                     "; ".join("%s %s" % (A.ERAS[e], "+".join("%d %s" % (v, k) for k, v in A.NEEDS[e])) for e in range(1, len(A.ERAS))), A.MARKET,
-                    round(A.DIFFUSE * 100), round(A.DIFFUSE_MAX * 100), " ".join("%s %.2f" % (A.ERAS[e], A.POW[e]) for e in range(len(A.ERAS))),
+                    round(A.DIFFUSE * 100), round(A.DIFFUSE_MAX * 100), A.LEAK_AFTER, A.LEAK_EVERY, " ".join("%s %.2f" % (A.ERAS[e], A.POW[e]) for e in range(len(A.ERAS))),
                     "/".join("%g" % x for x in A.RNG), A.QUALITY[0], A.QUALITY[1])))
         L.append("THE TREE  discovery [age] <- what it needs first : what it brings")
         for t, (e, req, un, fx, word) in A.TREE.items():
@@ -309,7 +309,7 @@ class Session:
         L.append("THE SEA is divided into SEA ZONES (province ids from %d up; api.sea, 'q sea'). A coastal province lists the zones it touches (api.provs[id]['coast']). "
                  "SHIPS (shp, later sub and cvn) are built in a coastal city, appear in the zone off it, and move only from zone to zone (`move <ships> P<zone>`); they need the discovery galleys or later. "
                  "TROOPS GO BY SEA on their own once you have galleys: `move` to a land province routes them over water when that is the faster or the only way (loading and landing cost about %d h each; "
-                 "at sea they move at your transport speed, cannot fire, and are sunk easily: defence %g). Deep water (zones touching no land) and the long sea lanes need the discovery navigation. "
+                 "at sea they move at your transport speed, cannot fire, and are sunk easily: x%g of their defence). Deep water (zones touching no land) and the long sea lanes need the discovery navigation. "
                  "Your shipping reaches only so many zones from a coast you own (galleys %d, sailing %d, ships_of_the_line %d, ironclads %d, dreadnoughts %d): troops and ships beyond that reach, "
                  "or inside a zone closed to you, are out of supply and waste away. SUPPLY ALSO GOES BY SEA: your coastal provinces supply each other through the zones your shipping can use "
                  "(a zone counts %g supply steps), so a landing can be fed from home, and can be starved by closing the sea behind it. "
