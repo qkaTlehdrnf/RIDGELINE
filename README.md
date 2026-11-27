@@ -68,10 +68,9 @@ python tools/make_mobile.py runs/replays/war war.html --step 24 --title "Ridgeli
 
 The engine is pure Python. Under [PyPy](https://pypy.org) the same code runs about twice as fast (`pypy3 tools/record_war.py ...`); results then differ slightly from CPython for the same seed.
 
-To let models write policies (this calls the Anthropic API and costs money, about 4 to 5 US dollars per generation for 31 factions):
+To let models write policies (this calls models through the `claude` command-line tool, which must be installed and signed in; it costs money, about 4 to 5 US dollars per generation for 31 factions):
 
 ```bash
-export ANTHROPIC_API_KEY=...
 python tools/league.py --world 1.0 --gens 1 --seeds 1 --max-ticks 600 --next-ticks 9216 \
     --models "$(cat runs/league_world/models.txt)" --out runs/league_world --jobs 6 --resume
 ```
