@@ -936,7 +936,10 @@ class Session:
                                    "zip", "isinstance", "print", "next", "iter", "Exception", "ValueError", "KeyError",
                                    "IndexError", "TypeError", "ZeroDivisionError", "AttributeError", "frozenset", "divmod", "pow")}
         env = {"__builtins__": safe, "math": math}
-        try: exec(compile(code, "<policy %s>" % name, "exec"), env)
+        try:
+            import ast
+            if any(isinstance(x, (ast.Import, ast.ImportFrom)) for x in ast.walk(ast.parse(code))): return "policy error: ImportError: __import__ not found"      # the same on every interpreter
+            exec(compile(code, "<policy %s>" % name, "exec"), env)
         except Exception as ex: return "policy error: %s: %s" % (type(ex).__name__, ex)
         if not callable(env.get("tick")): return "policy error: define tick(api)"
         self.sources[name] = (code, max(1, int(every)))

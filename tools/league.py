@@ -16,6 +16,7 @@ import json, os, re, subprocess, sys, time
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path.insert(0, ROOT)
 from ridgeline import data as D
+from ridgeline import ages as _AG
 from ridgeline.engine import Game
 from ridgeline.iface import PolicyApi, Session
 from ridgeline.mapgen import gen_map
@@ -105,6 +106,12 @@ def report(pid, factions, games, detail="standard"):
             gme["bank"][pid], gme["inc"][pid], gme["kinds"][pid]))
         L.append(" your research results (the hidden table is drawn anew for every war and every faction, so a line that paid off here may be a dead end next time): %s"
                  % ("; ".join(gme["tech"][pid]) or "you researched nothing"))
+        if gme.get("ages") and gme["ages"][pid]:
+            L.append(" the war stood for the years 0 to %d (%d game hours). You ended in the %s age with %d discoveries; you entered each age in the year: %s" % (
+                _AG.CAL_YEARS, r["ticks"], gme["ages"][pid][0], gme["ages"][pid][1], ", ".join("%s %d" % (a_, y_) for y_, a_ in gme["age_t"][pid])))
+            L.append(" the factions you came across ended in: %s" % (", ".join("%s %s (%d discoveries, %d provinces)" % (factions[i], gme["ages"][i][0], gme["ages"][i][1], r["provinces"][i]) for i in gme["met"][pid] if i != pid and gme["ages"][i]) or "-"))
+            if gme["open_end"][pid]: L.append(" discoveries open to you at the end and never started (res in all, name, share already seeped in): %s" % "; ".join("%d %s %.2f" % x for x in gme["open_end"][pid]))
+            m_ = gme["money"][pid]; L.append(" your purse over the whole war: earned %d res; spent on %s" % (m_["earned"], ", ".join("%s %d" % (k, v) for k, v in sorted(m_.items(), key=lambda kv: -kv[1]) if k != "earned")))
         L.append(" units still on an outdated model at the end: %d of %d" % (gme["old"][pid], sum(gme["kinds"][pid].values())))
         nm = lambda i: factions[i]
         L.append(" factions you came across: %s" % (", ".join(nm(i) for i in gme["met"][pid] if i != pid) or "none"))
@@ -204,6 +211,7 @@ def play(policies, factions, seed, bmodel, max_ticks, letters=None):
         to = int(to)
         for frm, text in rows: g.players[to].mail.append(dict(t=0, frm=frm, text=text[:D.MAIL_LEN])); g.players[to].met.add(frm)
     tl = []; own_at = {}; errs = [None] * n
+    age_t = [[] for _ in range(n)]                      # (year, age) whenever a faction enters a new age
     while not g.over:
         for k in g.assaults:
             if k not in own_at: own_at[k] = g.owner[k[0]]
@@ -211,6 +219,10 @@ def play(policies, factions, seed, bmodel, max_ticks, letters=None):
             s.pre_tick()
             if "main" in s.policies and s.policies["main"]["err"]: errs[s.pid] = s.policies["main"]["err"]
         g.step()
+        if g.ages and g.tick % 24 == 0:
+            for p in g.players:
+                e = _AG.era_of(p)
+                if not age_t[p.id] or age_t[p.id][-1][1] != _AG.ERAS[e]: age_t[p.id].append((_AG.year(g.tick), _AG.ERAS[e]))
         if g.tick % 120 == 0:
             tl.append(dict(t=g.tick, prov=[g.owner.count(i) for i in range(n)], units=[p.n_units for p in g.players],
                            income=[round(p.income - p.upkeep) for p in g.players], mp=[int(p.mp) for p in g.players], assaults=len(g.battles),
@@ -224,7 +236,9 @@ def play(policies, factions, seed, bmodel, max_ticks, letters=None):
         b = dict(b); b["owner"] = own_at.get((b["prov"], b["side"]), -1); battles.append(b)
     return dict(result=res, timeline=tl, battles=battles, land=sum(1 for p in g.provs if p.terrain != "water"),
                 cmds=[(s.stats["cmds"], s.stats["errors"], "") for s in sess],
-                tech=[[x["text"] for x in p.tech_log] for p in g.players], spent=[len(p.tech_log) for p in g.players],
+                tech=[[("year %d%s: " % (_AG.year(x["t"]), " (seeped in from abroad)" if x.get("leak") else "") if g.ages else "") + x["text"] for x in p.tech_log] for p in g.players], spent=[len(p.tech_log) for p in g.players],
+                ages=[(_AG.ERAS[_AG.era_of(p)], len(p.known)) if g.ages else None for p in g.players], money=[dict(earned=round(p.earned), **{k: round(v) for k, v in p.spent.items()}) for p in g.players],
+                age_t=age_t, open_end=[sorted((round(_AG.price(g, p.id, d)[1]), d, round(_AG.seeped(p, d), 2)) for d in _AG.TREE if _AG.status(g, p.id, d) == "open")[:12] if g.ages and p.alive else [] for p in g.players],
                 bank=[dict(res=int(p.res), **{k: int(v) for k, v in p.bank.items()}) for p in g.players],
                 inc=[{k: round(v) for k, v in p.inc.items()} for p in g.players],
                 kinds=[_kinds(g, i) for i in range(n)],
@@ -251,6 +265,9 @@ def main():
         factions = tuple(w[0] for w in D.WORLD)
     else: factions = tuple(opt("--factions", "aurum,sable,cinder").split(","))
     models = opt("--models", None); models = models.split(",") if models else [opt("--model", "claude-opus-5-5")] * len(factions)
+    if "--calendar" in a:
+        from ridgeline import ages as _A
+        _A.set_calendar(int(opt("--calendar", 9216)))             # game hours that stand for the 2,000 years
     max_ticks = int(opt("--max-ticks", 3000)); bmodel = os.path.join(ROOT, "policies", "model.json")
     global OUT
     if "--out" in a: OUT = os.path.join(ROOT, opt("--out", "runs/league"))
