@@ -36,6 +36,7 @@ def main():
         if os.path.exists(bm): s.model = json.load(open(bm))
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     rec = Recorder(g, out + ".rlr"); rec.frame(); t0 = time.time(); side = []; seen = 0
+    cities = [p.id for p in g.provs if p.city and p.terrain != "water"]; city = []      # what each city yields a day, every 10 days: how big it is drawn
     def snap():
         nonlocal seen
         new = g.battle_log[seen:]; seen = len(g.battle_log); sea = {}; ships = [0] * n; air = [0] * n
@@ -51,7 +52,7 @@ def main():
                          era=[A.era_of(p) for p in g.players], known=[len(p.known) for p in g.players], ships=ships, air=air, sea=sea,
                          wars=sum(1 for (x, y) in g.hostile if g.war(x, y)), sat=[int(p.sat) for p in g.players],
                          attacks=sum(1 for b in new if b.get("aimed", 1) > 0), won=sum(1 for b in new if b.get("aimed", 1) > 0 and b.get("won"))))
-    dump = lambda res, f=None: json.dump(dict(result=res, gens=used, side=side, falls=sorted(set((t, x) for p in g.players for t, k, x in p.events if k == "fall")),
+    dump = lambda res, f=None: json.dump(dict(result=res, gens=used, cities=cities, city=city, side=side, falls=sorted(set((t, x) for p in g.players for t, k, x in p.events if k == "fall")),
                                       tech=[[(x["t"], x["line"]) for x in p.tech_log if x["line"] in A.TREE] for p in g.players], strikes=[(t, p.faction, x) for p in g.players for t, k, x in p.events if "issile hit" in x],
                                       spent=[{k: round(v) for k, v in p.spent.items()} for p in g.players], earned=[round(p.earned) for p in g.players],
                                       depot_events=[(t, p.faction, x) for p in g.players for t, k, x in p.events if k == "depot"]), open(f or out + ".json", "w"))
@@ -62,6 +63,7 @@ def main():
         g.step()
         if g.tick % every == 0: rec.frame()
         if g.tick % 12 == 0: snap()
+        if g.tick % 240 == 0: city.append([g.tick] + [int(round(g.prod[i])) for i in cities])
         if g.tick % 2400 == 0: dump(part(), out + ".part.json")          # so that a long war can be looked at (and is not lost) before it ends
         if g.tick % 200 == 0: print("t%d units %d %.0fs" % (g.tick, len(g.units), time.time() - t0), flush=True)
     res = dict(seed=seed, winner=g.winner, ticks=g.tick, provinces=[len(g.owned[i]) for i in range(n)], alive=[p.alive for p in g.players])

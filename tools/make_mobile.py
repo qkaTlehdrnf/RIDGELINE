@@ -33,7 +33,7 @@ input[type=range]{flex:1;height:32px;accent-color:#58a6ff}
 <div id="mapbox"><canvas id="c"></canvas><div id="tip"></div><div id="ev"></div></div>
 <div id="ctl"><button id="play">▶</button><input id="sl" type="range" min="0" value="0"><button id="spd">1x</button><button id="fit">⤢</button></div>
 <div id="stats"></div>
-<div id="legend">점 = 그 지역의 유닛 수, 빨간 고리 = 돌격 중, 흰 네모 = 보급 거점, 주황 마름모 = 도시(확대하면 이름), ★ = 수도. 지도는 끌고 두 손가락으로 확대, 지역이나 진영을 누르면 자세히.</div>
+<div id="legend">점 = 그 지역의 유닛 수, 빨간 고리 = 돌격 중, 흰 네모 = 보급 거점, 주황 마름모 = 도시(클수록 산출이 큼, 확대하면 이름), ★ = 수도. 지도는 끌고 두 손가락으로 확대, 지역이나 진영을 누르면 자세히.</div>
 <div id="list"></div></div>
 <script>
 const DATA=__DATA__;
@@ -61,8 +61,9 @@ function draw(){if(lastPaint!==fr||lastSel!==sel)paintMap();const r=devicePixelR
   ctx.beginPath();ctx.arc(x,y,rad,0,7);ctx.fillStyle=(sel>=0&&o[p]!==sel)?'rgba(255,255,255,.2)':'rgba(255,255,255,.75)';ctx.fill();ctx.lineWidth=.5;ctx.strokeStyle='rgba(0,0,0,.5)';ctx.stroke()}
  const bt=DATA.battles[fr]||[];ctx.strokeStyle='#ff3b30';ctx.lineWidth=Math.max(1.5,k);for(const p of bt){ctx.beginPath();ctx.arc(sx(DATA.px[p]),sy(DATA.py[p]),4+3*k,0,7);ctx.stroke()}
  const dp=DATA.depots[Math.min(DATA.depots.length-1,fr)]||[];for(let f=0;f<NF;f++){const m=dp[f]||{};for(const d in m){const x=sx(DATA.px[d]),y=sy(DATA.py[d]),q=5+2.5*k;ctx.fillStyle='#fff';ctx.strokeStyle='#000';ctx.lineWidth=1;ctx.fillRect(x-q/2,y-q/2,q,q);ctx.strokeRect(x-q/2,y-q/2,q,q)}}
- {const q=2.2+1.6*k;ctx.lineWidth=1;ctx.strokeStyle='#1a1205';ctx.fillStyle='#ff9f0a';for(const c of DATA.cities||[]){const x=sx(DATA.px[c]),y=sy(DATA.py[c]);if(x<-9||y<-9||x>w+9||y>h+9)continue;ctx.beginPath();ctx.moveTo(x,y-q);ctx.lineTo(x+q,y);ctx.lineTo(x,y+q);ctx.lineTo(x-q,y);ctx.closePath();ctx.fill();ctx.stroke()}
-  if(cam.s>=5){ctx.font='10px sans-serif';ctx.textAlign='center';ctx.textBaseline='top';ctx.lineWidth=3;ctx.strokeStyle='rgba(0,0,0,.75)';ctx.fillStyle='#ffd9a0';for(const c of DATA.cities||[]){const nm=DATA.names[c];if(!nm)continue;const x=sx(DATA.px[c]),y=sy(DATA.py[c]);if(x<-40||y<-9||x>w+40||y>h+9)continue;ctx.strokeText(nm,x,y+q+1);ctx.fillText(nm,x,y+q+1)}}}
+ {const q0=2.2+1.6*k;let q=q0;ctx.lineWidth=1;ctx.strokeStyle='#1a1205';ctx.fillStyle='#ff9f0a';const CY=DATA.city||[];let row=null;if(CY.length){const tt=DATA.t[fr];let j=0;while(j+1<CY.length&&CY[j+1][0]<=tt)j++;row=CY[j]}
+  for(let ci=0;ci<(DATA.cities||[]).length;ci++){const c=DATA.cities[ci];const x=sx(DATA.px[c]),y=sy(DATA.py[c]);if(x<-9||y<-9||x>w+9||y>h+9)continue;if(row)q=q0*(0.55+0.5*Math.sqrt(Math.max(0,row[ci+1])/DATA.cityRef));ctx.beginPath();ctx.moveTo(x,y-q);ctx.lineTo(x+q,y);ctx.lineTo(x,y+q);ctx.lineTo(x-q,y);ctx.closePath();ctx.fill();ctx.stroke()}
+  q=q0;if(cam.s>=5){ctx.font='10px sans-serif';ctx.textAlign='center';ctx.textBaseline='top';ctx.lineWidth=3;ctx.strokeStyle='rgba(0,0,0,.75)';ctx.fillStyle='#ffd9a0';for(const c of DATA.cities||[]){const nm=DATA.names[c];if(!nm)continue;const x=sx(DATA.px[c]),y=sy(DATA.py[c]);if(x<-40||y<-9||x>w+40||y>h+9)continue;ctx.strokeText(nm,x,y+q+1);ctx.fillText(nm,x,y+q+1)}}}
  ctx.fillStyle='#ffd60a';ctx.fillStyle='#b8860b';ctx.font=(5+2.5*k)+'px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';for(let f=0;f<NF;f++){const cp=DATA.capitals[f];if(o[cp]===f)ctx.fillText('★',sx(DATA.px[cp]),sy(DATA.py[cp]))}
  {const st=DATA.side[Math.min(DATA.side.length-1,fr)]||{};for(const z of st.sea||[]){const x=sx(DATA.px[z[0]]),y=sy(DATA.py[z[0]]),q=(z[2]===1?3:2)+1.2*k+Math.sqrt(z[3])*.5,cl=COL[z[1]];ctx.fillStyle='rgb('+cl.join(',')+')';ctx.strokeStyle=z[2]===1?'#fff':'#000';ctx.lineWidth=1;ctx.beginPath();if(z[2]===1){ctx.moveTo(x,y-q);ctx.lineTo(x+q,y);ctx.lineTo(x,y+q);ctx.lineTo(x-q,y)}else if(z[2]===2){ctx.moveTo(x,y-q);ctx.lineTo(x+q,y+q);ctx.lineTo(x-q,y+q)}else ctx.rect(x-q*.7,y-q*.7,q*1.4,q*1.4);ctx.closePath();ctx.fill();ctx.stroke()}}
  if(selP>=0){ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.beginPath();ctx.arc(sx(DATA.px[selP]),sy(DATA.py[selP]),9,0,7);ctx.stroke()}
@@ -146,7 +147,7 @@ def main():
     data = dict(rivers=rivers, gw=gw // k, gh=gh // k, cells=base64.b64encode(small.astype("<i2").tobytes()).decode(), factions=h["factions"],
                 models=[("Opus" if "opus" in x else "Haiku" if "haiku" in x else x) for x in ml], colors=colors(nf),
                 px=[round(p["cx"] / k, 1) for p in sc["provs"]], py=[round(p["cy"] / k, 1) for p in sc["provs"]], land=[int(p["terrain"] != "water") for p in sc["provs"]],
-                names={str(p["id"]): p["name"] for p in sc["provs"] if p.get("name")}, capitals=sc["capitals"], cities=[p["id"] for p in sc["provs"] if p.get("city")], t=T, owner0=owner0, changes=changes,
+                names={str(p["id"]): p["name"] for p in sc["provs"] if p.get("name")}, capitals=sc["capitals"], cities=side.get("cities") or [p["id"] for p in sc["provs"] if p.get("city")], city=side.get("city") or [], cityRef=max(1.0, float(np.median([v for r in (side.get("city") or [[0, 1]])[:1] for v in r[1:]] or [1]))), t=T, owner0=owner0, changes=changes,
                 years=2000 if any(x.get("era") for x in st) else 0, counts=base64.b64encode(np.concatenate(counts).tobytes()).decode(), div=4, battles=battles, depots=dep, side=st, events=events)
     html = PAGE.replace("__TITLE__", title).replace("__DATA__", json.dumps(data, separators=(",", ":"), ensure_ascii=False))
     open(out, "w", encoding="utf-8").write(html); print("wrote", out, "%.2f MB" % (os.path.getsize(out) / 1e6), len(T), "frames")
