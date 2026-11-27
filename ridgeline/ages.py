@@ -26,7 +26,7 @@ NEEDS = ((), (("steel", 20),), (("steel", 40),), (("steel", 60), ("coal", 60)), 
          (("steel", 100), ("oil", 120), ("rubber", 60), ("rare", 20)), (("steel", 120), ("oil", 140), ("rubber", 60), ("rare", 60)))   # ... and what else
 MARKET = 8                             # res per unit of a strategic resource you lack when you start a discovery (bought abroad; discoveries only)
 DIFFUSE = 0.10; DIFFUSE_MAX = 0.5      # a discovery is this much cheaper for every faction you have met that already has it
-LEAK_AFTER = 768; LEAK_EVERY = 96       # hours a met faction must have had a discovery before it seeps to you unpaid; at most one such arrival per this many hours
+SEEP = 0.012; SEEP_FULL = 768; SEEP_CAP = 3.0     # share of a discovery that comes to you per day per met faction that has it (a holder counts fully once it has had it this many hours; at most this many holders count)
 START = dict(inf="spearmen", mil="levy", rec="runners")     # what everyone has in the year 0
 
 # name: (age, needs these first, [(kind, model name)], other effect or None, a word on what it is)
@@ -90,11 +90,19 @@ OPENED_BY = {c: g[0][0] for c, g in GENS.items()}          # kind -> discovery t
 def year(tick): return int(tick * CAL_YEARS / CAL_HOURS)
 
 
+def seeped(p, name): return min(1.0, getattr(p, "seep", None) and p.seep.get(name, 0.0) or 0.0)
+
+
+def hours(p, name):
+    """Hours the discovery still takes this faction: what has seeped in from abroad need not be worked out again."""
+    return max(6, int(round(HOURS[TREE[name][0]] * (1.0 - seeped(p, name)))))
+
+
 def cost(game, pid, name):
-    """What the discovery costs this faction now: cheaper for every faction it has met that already knows it."""
+    """What the discovery costs this faction now: cheaper for every met faction that already knows it, and cheaper by the share of it that has already seeped in."""
     e = TREE[name][0]; p = game.players[pid]
     k = sum(1 for o in p.met if name in game.players[o].known)
-    f = 1.0 - min(DIFFUSE_MAX, DIFFUSE * k)
+    f = (1.0 - min(DIFFUSE_MAX, DIFFUSE * k)) * (1.0 - seeped(p, name))
     c = dict(res=int(round(COST[e] * f)))
     for r, v in NEEDS[e]: c[r] = int(round(v * f))
     return c
@@ -128,7 +136,7 @@ def model(p, code, g):
 
 def setup(game, p, rng):
     """Put player p in the year 0."""
-    p.base = p.stats; p.known = set(); p.known_t = {}; p.leak_t = -10 ** 9; p.gen = {}; p.lmul = {}; p.gmul = dict(dig=1.0, cost=1.0); p.gadd = dict(xp0=0)
+    p.base = p.stats; p.known = set(); p.known_t = {}; p.seep = {}; p.gen = {}; p.lmul = {}; p.gmul = dict(dig=1.0, cost=1.0); p.gadd = dict(xp0=0)
     p.fort_cap = 1; p.sail = 0.0; p.sea_reach = 0; p.ocean = False; p.sat = False; p.missile = False; p.aa = False
     p._q = {(c, g): round(rng.uniform(*QUALITY), 3) for c, gs in GENS.items() for g in range(len(gs))}
     p.stats = {}; p.marks = {}
@@ -185,18 +193,20 @@ def finish(game, p, name):
 
 
 def leak(game):
-    """Once a day: what the peoples you have met have long known reaches you without payment (prerequisites first, one at a time)."""
+    """Once a day: knowledge seeps in from the peoples you have met. Each discovery whose prerequisites you have fills up a little for every met
+    faction that has it (more the longer they have had it); the filled share comes off its price and its hours, and at 100% it is yours."""
     t = game.tick; ps = game.players
     for p in ps:
-        if not p.alive or not hasattr(p, "known_t") or t - p.leak_t < LEAK_EVERY: continue
+        if not p.alive or not hasattr(p, "known_t"): continue
         met = [ps[q] for q in game.met(p.id) if q != p.id and hasattr(ps[q], "known_t")]
         if not met: continue
-        busy = set(r[0] for r in p.research); best = None
+        busy = set(r[0] for r in p.research)
         for name, v in TREE.items():
             if name in p.known or name in busy or any(r not in p.known for r in v[1]): continue
-            if any(t - q.known_t.get(name, t) >= LEAK_AFTER for q in met):
-                if best is None or (v[0], name) < best: best = (v[0], name)
-        if best:
-            p.leak_t = t; text = finish(game, p, best[1])
-            p.tech_log.append(dict(t=t, line=best[1], level=0, ok=True, gain=0.0, text=text, leak=True))
-            game.event(p.id, "tech", "learned from abroad, unpaid: " + text)
+            w = min(SEEP_CAP, sum(min(1.0, (t - q.known_t[name]) / SEEP_FULL) for q in met if name in q.known_t))
+            if w <= 0: continue
+            x = p.seep[name] = p.seep.get(name, 0.0) + SEEP * w
+            if x >= 1.0:
+                text = finish(game, p, name)
+                p.tech_log.append(dict(t=t, line=name, level=0, ok=True, gain=0.0, text=text, leak=True))
+                game.event(p.id, "tech", "learned from abroad: " + text)

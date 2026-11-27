@@ -290,7 +290,7 @@ class Session:
         L.append("AGES: everyone starts in the ancient world. You can raise only %s. Every other kind of unit, bigger forts, ships, aircraft, missiles and satellites must be DISCOVERED, "
                  "in the order the tree below allows: `research <discovery>` (uses one of your %d research slots; res cost and hours by age: %s; from the %s age on also strategic resources: %s). "
                  "Strategic resources a discovery needs and you do not have are bought abroad at %d res each, automatically (for discoveries only, not for units or upgrades). "
-                 "A discovery that a faction you have met already has is %d%% cheaper for you for each such faction (up to %d%%); 'q tree' and api.tree show your price now. What a faction you have met has had for %d hours or more also reaches you unpaid in the end: at most one such discovery per %d hours, prerequisites first (it arrives as a 'tech' event; your units still need `refit`). The nominal power below means that a model two or three ages ahead destroys older ones at almost no loss. "
+                 "A discovery that a faction you have met already has is %d%% cheaper for you for each such faction (up to %d%%); 'q tree' and api.tree show your price now. Knowledge also SEEPS in by itself: every day, each discovery whose prerequisites you have fills by %.1f%% for every met faction that has it (a faction counts in full once it has had it %d hours, less before; at most %g factions count). The filled share ('seeped' in api.tree, 0..1) comes off both the price and the hours, so a discovery your neighbours have long had grows cheaper and quicker day by day, and at 100%% it is yours unpaid (a 'tech' event; your units still need `refit`). The nominal power below means that a model two or three ages ahead destroys older ones at almost no loss. "
                  "A discovery OPENS a kind of unit, or gives a kind a NEW MODEL, or changes what you can do. A model's attack and defence are the unit table's values (which describe the newest "
                  "model of all) times the nominal power of its age (%s; a second model inside one age x1.12), its range times %s (never under 1.5), and it needs steel only from the medieval age, oil only from the great-war age. "
                  "WHAT NOBODY KNOWS BEFOREHAND: your own version of a model is its nominal power times a hidden factor between %.2f and %.2f, drawn separately for you, for every kind and model, in this war. "
@@ -299,7 +299,7 @@ class Session:
                  % ((", ".join("%s (%s)" % (c, n) for c, n in A.START.items()), D.TECH_SLOTS,
                     "; ".join("%s %d res %d h" % (A.ERAS[e], A.COST[e], A.HOURS[e]) for e in range(len(A.ERAS))), A.ERAS[1],
                     "; ".join("%s %s" % (A.ERAS[e], "+".join("%d %s" % (v, k) for k, v in A.NEEDS[e])) for e in range(1, len(A.ERAS))), A.MARKET,
-                    round(A.DIFFUSE * 100), round(A.DIFFUSE_MAX * 100), A.LEAK_AFTER, A.LEAK_EVERY, " ".join("%s %.2f" % (A.ERAS[e], A.POW[e]) for e in range(len(A.ERAS))),
+                    round(A.DIFFUSE * 100), round(A.DIFFUSE_MAX * 100), A.SEEP * 100, A.SEEP_FULL, A.SEEP_CAP, " ".join("%s %.2f" % (A.ERAS[e], A.POW[e]) for e in range(len(A.ERAS))),
                     "/".join("%g" % x for x in A.RNG), A.QUALITY[0], A.QUALITY[1])))
         L.append("THE TREE  discovery [age] <- what it needs first : what it brings")
         for t, (e, req, un, fx, word) in A.TREE.items():
@@ -341,7 +341,7 @@ class Session:
         for t, (e, req, un, fx, word) in A.TREE.items():
             st = A.status(g, p.id, t)
             out[t] = dict(status=st, age=A.ERAS[e], needs=list(req), missing=[r for r in req if r not in p.known], opens=[c for c, n in un if A.OPENED_BY[c] == t],
-                          new_models=[c for c, n in un if A.OPENED_BY[c] != t], effect=word, cost=A.cost(g, p.id, t) if st != "known" else None, res_now=A.price(g, p.id, t)[1] if st != "known" else None, hours=A.HOURS[e],
+                          new_models=[c for c, n in un if A.OPENED_BY[c] != t], effect=word, cost=A.cost(g, p.id, t) if st != "known" else None, res_now=A.price(g, p.id, t)[1] if st != "known" else None, hours=A.hours(p, t) if st != "known" else 0, seeped=round(A.seeped(p, t), 2),
                           known_to_met=sum(1 for o in p.met if t in g.players[o].known))
         return out
 
@@ -1150,7 +1150,7 @@ class PolicyApi:
     api.enemy             {prov: dict(n, str, exact, types, who)}   enemy units you can currently see
     api.enemy_capital     nearest known enemy capital (province id or None)      api.enemy_capitals  {player id: province}
     api.year, api.age     the calendar year (0-2000) and the age of your latest discovery      api.can_raise  [unit kinds you can raise now]; api.stats / api.costs / api.unit_costs hold only those
-    api.tree              {discovery: dict(status 'known'|'researching'|'open'|'locked', age, needs [..], missing [..], opens [kinds], new_models [kinds], effect, cost (dict, your price now), res_now (res it takes in all if started now, buying what you lack), hours, known_to_met)}
+    api.tree              {discovery: dict(status 'known'|'researching'|'open'|'locked', age, needs [..], missing [..], opens [kinds], new_models [kinds], effect, cost (dict, your price now), res_now (res it takes in all if started now, buying what you lack), hours (still needed), seeped (0..1 share already come in from abroad), known_to_met)}
                           api.known = [discoveries you have]; start one with api.cmd("research <discovery>"). api.fort_cap = highest fort level you can build.
     api.budget            dict(res, income, upkeep_units, upkeep_works, net (per day), days_left (None unless net < 0), upkeep_share (upkeep / income), earned, spent {units, research, works, refit, depots, missiles},
                           upkeep_by_kind {kind: res per day}, units, in_training, res_in_training, research, stock, income_by, fuel_per_day,

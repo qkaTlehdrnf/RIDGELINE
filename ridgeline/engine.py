@@ -535,7 +535,7 @@ class Game:
             if p.res < res: return "need %d res (have %d)%s" % (res, p.res, " (of which %d res to buy the strategic resources you lack, at %d res each)" % (extra, A.MARKET) if extra else "")
             p.res -= res; p.spent["research"] += res
             for k, v in pay.items(): p.bank[k] -= v
-            p.research.append([line, 0, A.HOURS[A.TREE[line][0]]]); return None
+            p.research.append([line, 0, A.hours(p, line)]); return None
         if line not in p._depth: return "unknown line '%s' (see 'q tech')" % line
         if "." in line and line.split(".")[0] not in p.stats: return "you cannot raise %s yet, so there is nothing to improve" % line.split(".")[0]
         lv, st = self.tech_status(pid, line)
