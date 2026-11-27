@@ -57,6 +57,7 @@ class Session:
         self.resting = set()        # front units pulled back to recover
         self.counters = {}          # the policy's own tallies (api.count): shown back to the faction in its review
         self.expand = set()         # unit ids under the standing order to keep taking neutral land
+        self.expand_x = 3.0         # a party sent against a free province is this many times the strength of the people seen there
         self.expand_to = {}         # unit id -> province the commander picked as the area to expand around
         self.explore = set()        # unit ids under the standing order to go and look at unexplored land
         self.no_go = set()          # unexplored provinces that turned out unreachable (water)
@@ -254,9 +255,10 @@ class Session:
         L.append(" fortify <sel>           dig in where they stand (own province); a later move/hold stops the digging")
         L.append(" front <sel>             standing order: spread along your border, heavier where more enemy is seen, dig in, and keep")
         L.append("                         re-spreading as the border moves; units under 40 strength rotate to the rear until 85. A later move/hold takes a unit off the front.")
-        L.append(" expand <sel> [P<id>]    standing order: keep taking free neutral provinces you have explored, one after another, away from")
+        L.append(" expand <sel> [P<id>] [x<r>]  standing order: keep taking free neutral provinces you have explored, one after another, away from")
         L.append("                         enemy units: the nearest one, or with P<id> the reachable one closest to the province you picked.")
         L.append("                         When no neutral land is in reach the unit joins the front order. Scouts (rec) cannot take land.")
+        L.append("                         Units go in parties: a province counts as dealt with once the strength sent there is x<r> times the local people's as last seen (r stays as set, 3 at first; see LOCAL PEOPLES).")
         L.append(" explore <sel>           standing order: go to the nearest province you have never seen, look, go on to the next; turns away")
         L.append("                         from enemy units; ends when nothing unexplored is in reach. Any unit can do it; rec is the fast one.")
         L.append(" recruit <type> [n] [P<city>]     default city: capital")
@@ -330,6 +332,13 @@ class Session:
         L.append("WAR: at sea and in the air units fire only at factions you are AT WAR with. You are at war with a faction for %d days after the last real assault on land between you (either way), "
                  "a missile strike, an air or naval attack on ground units, or `declare <faction>`; the other side is told. A pact ends it. On land nothing changes: see FRONTS. api.wars lists whom you are at war with."
                  % (D.WAR_HOURS // 24))
+        if g.ages:
+            L.append("LOCAL PEOPLES: land that no faction owns is not empty. Each such province has a militia of the people who live there (%g to %g units' worth of strength, about %g more around a city, x%g in desert, tundra and jungle; "
+                     "api.provs[id]['locals'] and the province lists show the strength as you last saw it). They never leave their province and attack nobody. Units that enter it (scouts excepted) fight them every hour: "
+                     "per 100 strength the locals have attack %g and defence %g, times the nominal power of THEIR age, defence also times the terrain's cover; their age is %d ages behind the median faction's (never before ancient). "
+                     "Your units' fire is their atk x strength x readiness as in any fight; the locals' fire is spread evenly over your units there. The province can be taken as usual once the militia is at 0. "
+                     "A militia nobody is pressing regains %d%% of its full strength a day, and land that loses its owner fills up again the same way."
+                     % (D.LOCAL_BASE * D.LOCAL_SPREAD[0], D.LOCAL_BASE * D.LOCAL_SPREAD[1], D.LOCAL_CITY, D.LOCAL_HARSH, D.LOCAL_ATK, D.LOCAL_DFN, D.LOCAL_LAG, round(D.LOCAL_HEAL * 100)))
         L.append("ROADS AND RAILWAYS join two neighbouring provinces (the infrastructure level above is what stands INSIDE one province: streets, yards, stores). "
                  "`road P<a> P<b>` builds a road, `rail P<a> P<b>` a railway (it replaces the road). Neighbours: that one stretch. Provinces further apart: the shortest way between them through your own supplied land, "
                  "as many stretches from P<a>'s end as you can pay for now (the reply says how many were started). Both ends of a stretch must be yours%s. "
@@ -731,7 +740,8 @@ class Session:
         elif verb in ("fortify", "dig"):
             ids = self._sel(toks.pop(0)); err = g.order_fortify(pid, ids)
         elif verb == "expand":
-            ids = self._sel(toks.pop(0)); to = self._prov(toks.pop(0)) if toks else None
+            ids = self._sel(toks.pop(0)); to = self._prov(toks.pop(0)) if toks and not toks[0].startswith("x") else None
+            if toks and toks[0].startswith("x"): self.expand_x = max(0.5, min(20.0, float(toks.pop(0)[1:])))
             g.order_hold(pid, ids); self.front.difference_update(ids); self.explore.difference_update(ids)
             sc = [i for i in ids if g.units[i].type == "rec"]; ids = [i for i in ids if g.units[i].type != "rec"]
             self.expand.update(ids)
@@ -1008,10 +1018,15 @@ class Session:
         g = self.g; pid = self.pid; ko = self.p.known_owner; provs = g.provs; ex = self.p.explored; vis = self.p.visible
         self.expand = set(i for i in self.expand if i in g.units)
         if not self.expand: return
-        taken = set(g.units[i].path[-1] for i in self.expand if g.units[i].path)
+        com = {}; kloc = self.p.known_local; X = self.expand_x          # strength already committed to each free province
+        for i in self.expand:
+            u = g.units[i]; t_ = u.path[-1] if u.path else (u.prov if g.owner[u.prov] < 0 else None)
+            if t_ is not None: com[t_] = com.get(t_, 0.0) + u.str
+        taken = set(t_ for t_, v_ in com.items() if v_ >= max(1.0, X * kloc.get(t_, 0.0)))
         for i in sorted(self.expand):
             u = g.units[i]
             if u.path or u.fighting or u.rout: continue
+            if g.owner[u.prov] < 0 and g.local[u.prov] > 0 and u.str >= 40: continue      # still facing the locals here
             if u.str < 40:
                 if g.owner[u.prov] != pid: g._retreat(u)
                 continue
@@ -1029,7 +1044,10 @@ class Session:
                         d = (provs[b].cx - tp.cx) ** 2 + (provs[b].cy - tp.cy) ** 2
                         if best is None or d < best: best = d; goal = b
                 if goal >= 0 and tp is None: break
-            if goal >= 0: taken.add(goal); g.order_move(pid, [i], goal, known=ex)
+            if goal >= 0:
+                com[goal] = com.get(goal, 0.0) + u.str
+                if com[goal] >= max(1.0, X * kloc.get(goal, 0.0)): taken.add(goal)
+                g.order_move(pid, [i], goal, known=ex)
             else: self.expand.discard(i); self.expand_to.pop(i, None); self.front.add(i)
 
     def _run_explore(self):
@@ -1229,6 +1247,7 @@ class PolicyApi:
                                   who=ko.get(pr.id, -1), visible=pr.id in p.visible, harsh=bool(pr.biome), sea=pr.sea, river=sorted(pr.river), coast=list(pr.coast), x=pr.cx, y0=pr.cy, steel=pr.steel, oil=pr.oil, rare=pr.rare, coal=pr.coal, rubber=pr.rubber, lat=pr.lat, cold=pr.id in g.cold, freezes=g.freezes(pr.id, 3), jungle=pr.id in g.jungle,
                                   dev=g.dev[pr.id] if g.owner[pr.id] == pid else kd.get(pr.id, (0.0, 0.0))[0], infra=g.infra[pr.id] if g.owner[pr.id] == pid else kd.get(pr.id, (0.0, 0.0))[1],
                                   agg=g.agg[pr.id] if g.owner[pr.id] == pid else None, yield_now=g.prod[pr.id] if g.owner[pr.id] == pid else None, room=g.room(pr.id) if g.owner[pr.id] == pid else None,
+                                  locals=p.known_local.get(pr.id, 0),
                                   links={b_: p.known_link.get((pr.id, b_) if pr.id < b_ else (b_, pr.id), 0) for b_ in g.lk[pr.id]} if g.lk[pr.id] else {},
                                   supplied=pr.id in p.supplied) for pr in (g.provs[i] for i in sorted(rel)) if pr.terrain != "water"}
         self.units = [dict(id=u.id, type=u.type, prov=u.prov, str=u.str, path=list(u.path), fighting=bool(u.fighting),

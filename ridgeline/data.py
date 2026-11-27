@@ -327,3 +327,10 @@ ROAD_MOVE = 1.5; RAIL_MOVE = 4.0                             # land units move t
 ROAD_HOP = 0.6; RAIL_HOP = 0.3                               # a supply step along the stretch counts this much
 LINK_ROAD = 0.10; LINK_RAIL = 0.25                           # added to how much of the neighbour's development counts towards your market
 LINK_NEED = dict(road="roads", rail="railways")              # the discovery each kind needs (on maps with the tree)
+
+# --- local peoples: land no faction owns is not empty (v14) ---
+LOCAL_BASE = 2.0; LOCAL_CITY = 4.0; LOCAL_HARSH = 0.5        # militia a free province can call out, in units' worth (x100 strength): base, more around a city, x this in desert / tundra / jungle
+LOCAL_SPREAD = (0.6, 1.4)                                    # drawn per province and war
+LOCAL_ATK = 8.0; LOCAL_DFN = 12.0                            # per 100 strength, x the nominal power of the locals' age, defence also x terrain cover
+LOCAL_LAG = 2                                                # the locals' weapons are this many ages behind the median faction (never before ancient)
+LOCAL_HEAL = 0.04                                            # share of their full strength they regain a day when no intruder stands on their land

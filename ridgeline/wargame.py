@@ -51,6 +51,7 @@ def belief_game(sess):
     g.dev = [(g0.dev[i] if g.owner[i] == pid else kd.get(i, (0.0, 0.0))[0]) for i in range(g.n)]
     g.infra = [(g0.infra[i] if g.owner[i] == pid else kd.get(i, (0.0, 0.0))[1]) for i in range(g.n)]
     g._note = ""; g.lk = [dict() for _ in range(g.n)]; g._lkmax = 1.0
+    g.local0 = list(g0.local0); g.local_era = g0.local_era; g.local = [(float(p0.known_local.get(i, 0.0)) if g.owner[i] < 0 else 0.0) for i in range(g.n)]      # local peoples as last seen
     for (a_, b_), l_ in p0.known_link.items(): g.lk[a_][b_] = g.lk[b_][a_] = l_; g._lkmax = max(g._lkmax, D.RAIL_MOVE if l_ == 2 else D.ROAD_MOVE)      # roads and railways as last seen
     g.access = set(k for k in g0.access if pid in k); g.prod = [float(pr.y) for pr in g.provs]; g.prod_mp = [float(pr.mp) for pr in g.provs]; g.agg = [1.0] * g.n
     g.hops = [{} for _ in g0.players]; g.hub = [{} for _ in g0.players]; g.throttle = [{} for _ in g0.players]; g.load = [{} for _ in g0.players]

@@ -51,7 +51,7 @@ class Player:
         self.known_depots = {}                                             # other factions' depots seen so far {prov: pid}
         self._cap = -1; self.hardy = False; self.tropic = True      # set from where the capital lies (world map)
         self.res = 0.0; self.mp = 0.0; self.capital = -1; self.queue = []     # [type, prov, hours_left]
-        self.visible = set(); self.known_owner = {}; self.known_fort = {}
+        self.known_local = {}; self.visible = set(); self.known_owner = {}; self.known_fort = {}
         self.met = set(); self._met_t = -99; self.mail = []     # factions come across so far; letters received
         self.events = []; self.throttle = {}; self.groups = {}
         self.supplied = set(); self.income = 0.0; self.upkeep = 0.0; self.mp_income = 0.0
@@ -96,6 +96,7 @@ class Game:
         self.battles = {}; self.contacts = []
         self.assaults = {}; self.battle_log = []     # open assault episodes; finished ones (training data)
         self._sight = {}
+        self.local = [0.0] * self.n; self.local0 = [0.0] * self.n; self.local_era = 0      # militia of the peoples living on land no faction owns: strength now, full strength; their age
         self._note = ""; self.lk = [dict() for _ in range(self.n)]; self._lkmax = 1.0     # roads (1) and railways (2) to neighbours: lk[a][b] == lk[b][a]
         self.dev = [0.0] * self.n; self.infra = [0.0] * self.n; self.access = set()    # development and infrastructure per province; ordered pairs of factions that opened their roads to each other
         self.prod = [float(pr.y) for pr in self.provs]; self.prod_mp = [float(pr.mp) for pr in self.provs]; self.agg = [1.0] * self.n   # what each province yields now
@@ -118,6 +119,13 @@ class Game:
         for i, pr in enumerate(self.provs):
             if pr.city: self.dev[i] = D.DEV_START_CITY
         for p in self.players: self.dev[p.capital] = D.DEV_START_CAPITAL
+        if self.ages:
+            lr = random.Random(seed * 104729 + 17)
+            for pr in self.provs:
+                if pr.terrain != "water" and pr.id < self.sea0:
+                    v = 100.0 * (D.LOCAL_BASE + (D.LOCAL_CITY if pr.city else 0.0)) * (D.LOCAL_HARSH if pr.biome else 1.0) * lr.uniform(*D.LOCAL_SPREAD)
+                    self.local0[pr.id] = v
+                    if self.owner[pr.id] < 0: self.local[pr.id] = v
         self._wealth()
         r = random.Random(seed * 31 + 5)
         for p in self.players:
@@ -184,6 +192,7 @@ class Game:
         old = self.owner[q]
         if old == new: return
         self.owner[q] = new
+        if new >= 0: self.local[q] = 0.0
         for o in (old, new):
             if o >= 0: self.sdirty[o] = True; self.vdirty[o] = True; self.ownvis[o] = None
         for a, b in self.access:
@@ -995,7 +1004,7 @@ class Game:
     def _economy(self):
         provs = self.provs
         if self.tick % 24 == 0:
-            self._econ_day()
+            self._econ_day(); self._locals_day()
             if self.ages: A.leak(self)
         for p in self.players:
             if not p.alive: continue
@@ -1504,6 +1513,31 @@ class Game:
         u.settled = True
         if u.rout: u.rout = False; u.mor = max(u.mor, float(D.MOR_RALLY))      # rallies behind the line
 
+    def _locals(self, q):
+        """Intruders on land no faction owns fight the people who live there: an hour of it. The land can be taken once their militia is broken."""
+        us = [u for u in self.pos[q] if not u.rout and u.type != "rec" and not u.st["dom"]]
+        if not us: return
+        pw = A.POW[self.local_era] if self.ages else 1.0; L = self.local[q]; k = D.DMG_K * 14.0; fire = 0.0
+        for u in us:
+            st = u.st; fire += st["atk"] * st["vg"] * u.str * 0.01 * (1.0 - D.RDY_ATK + D.RDY_ATK * u.rdy * 0.01) * (1.0 if u.supplied else D.UNSUPPLIED_MULT)
+            u.contact = True; u.fighting = 1; u.hours += 1; self.active.add(u.id); self._hot.append(u)
+        back = D.LOCAL_ATK * pw * L * 0.01 * k / len(us)
+        self.local[q] = L = max(0.0, L - fire * k / max(0.05, D.LOCAL_DFN * pw * self.provs[q].dfn))
+        for u in us:
+            u.str -= back / max(0.05, u.st["dfn"]) * self.rng.uniform(0.8, 1.2)
+            if u.str <= 5.0: self._die(u, None)
+        if L <= 0.0:
+            for o in set(u.owner for u in us): self.event(o, "locals", "the people of P%d are subdued" % q, key="locals", gap=12)
+
+    def _locals_day(self):
+        """Once a day: the locals' age follows the world's at a distance, and militias no intruder is pressing recover."""
+        if self.ages:
+            es = sorted(A.era_of(p) for p in self.players if p.alive)
+            if es: self.local_era = max(0, es[len(es) // 2] - D.LOCAL_LAG)
+        own = self.owner; loc = self.local; l0 = self.local0; pos = self.pos
+        for i in range(self.sea0):
+            if own[i] < 0 and loc[i] < l0[i] and not any(u.type != "rec" and not u.st["dom"] for u in pos[i]): loc[i] = min(l0[i], loc[i] + D.LOCAL_HEAL * l0[i])
+
     def _capture(self):
         """A province changes hands when a side has a unit at its key point (within CAP_R) and no unit of any
         other side that is still fighting stands in the province."""
@@ -1513,6 +1547,8 @@ class Game:
             if u is not None and owner[u.prov] != u.owner and u.prov < self.sea0 and not u.st["dom"]: cand.add(u.prov)
         for q in sorted(cand):
             sides = set(u.owner for u in self.pos[q] if not u.rout and u.type != "rec" and not u.st["dom"] and (u.owner, owner[q]) not in self.peace)      # scouts neither take nor hold land; nor do pact partners passing through
+            if owner[q] < 0 and self.local[q] > 0.0 and sides:
+                self._locals(q); continue
             if len(sides) != 1: continue
             side = next(iter(sides)); pr = self.provs[q]; r2 = D.CAP_R ** 2
             if side == self.owner[q]: continue
@@ -1624,12 +1660,13 @@ class Game:
                 if a == p.id: vis |= self.players[b].visible
             p.visible = vis; p.explored |= vis
             ko = p.known_owner; kf = p.known_fort; owner = self.owner
-            kd = p.known_dev; dev = self.dev; infra = self.infra; lk = self.lk; kl = p.known_link
+            kd = p.known_dev; dev = self.dev; infra = self.infra; lk = self.lk; kl = p.known_link; kloc = p.known_local; loc = self.local
             for i in vis:
                 ko[i] = owner[i]; kf[i] = self.fort_level(i)
                 if dev[i] > 0 or infra[i] > 0 or i in kd: kd[i] = (dev[i], infra[i])
                 if lk[i]:
                     for b_, l_ in lk[i].items(): kl[(i, b_) if i < b_ else (b_, i)] = l_
+                if owner[i] < 0 or i in kloc: kloc[i] = round(loc[i]) if owner[i] < 0 else 0
             for e in self.players:
                 if e.id != p.id and e.alive:
                     for d in e.depots:
