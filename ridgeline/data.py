@@ -32,6 +32,12 @@ UNITS = {
     "mec": dict(atk=12, dfn=15, spd=1.9, sight=1, cost=60, mp=28, time=54, upkeep=0.50, rough=0.8, high=1.0, climb=1.4, dig=0.8, pierce=0.1),
     "hvt": dict(atk=26, dfn=16, spd=1.3, sight=1, cost=95, mp=15, time=84, upkeep=0.90, rough=0.5, high=1.0, climb=1.8, dig=0.2, pierce=0.35),
     "rkt": dict(atk=20, dfn=4,  spd=1.4, sight=1, cost=70, mp=12, time=60, upkeep=0.55, rough=0.9, high=1.0, climb=1.3, dig=0.3, pierce=0.3),
+    # --- v11: ships (dom 1: live in sea zones) and aircraft (dom 2: fly over anything). The numbers are the newest model; see ages.py
+    "shp": dict(atk=24, dfn=20, spd=3.0, sight=2, cost=90, mp=15, time=96, upkeep=0.80, rough=1.0, high=1.0, climb=1.0, dig=0.0, pierce=0.3),
+    "sub": dict(atk=22, dfn=8,  spd=2.2, sight=1, cost=60, mp=8,  time=72, upkeep=0.50, rough=1.0, high=1.0, climb=1.0, dig=0.0, pierce=0.0),
+    "cvn": dict(atk=22, dfn=14, spd=2.8, sight=3, cost=150, mp=25, time=120, upkeep=1.40, rough=1.0, high=1.0, climb=1.0, dig=0.0, pierce=0.3),
+    "ftr": dict(atk=14, dfn=9,  spd=12.0, sight=3, cost=70, mp=4,  time=60, upkeep=0.70, rough=1.0, high=1.0, climb=1.0, dig=0.0, pierce=0.0),
+    "bmr": dict(atk=26, dfn=6,  spd=9.0, sight=2, cost=100, mp=6, time=72, upkeep=0.90, rough=0.9, high=1.0, climb=1.0, dig=0.0, pierce=0.5),
 }
 # Resources. `res` (general supplies and money) comes from every province; the other three only from deposits.
 RES = ("res", "steel", "oil", "rare", "coal", "rubber")
@@ -45,9 +51,13 @@ EXTRA = {
     "mot": dict(steel=4, oil=6, ap=0.6), "art": dict(steel=10, ap=0.8, supp=2.5), "atg": dict(steel=10, ap=2.5),
     "arm": dict(steel=18, oil=8, hard=1.0, ap=1.0), "mec": dict(steel=12, oil=8, hard=0.5, ap=0.7),
     "hvt": dict(steel=30, oil=14, rare=2, hard=1.0, ap=1.3), "rkt": dict(steel=16, oil=8, rare=3, ap=0.7, supp=4.0),
+    # dom: 0 land, 1 sea, 2 air.  vg / vs / va: fire multiplier against ground units / ships / aircraft (0 = cannot hit them at all)
+    "shp": dict(steel=30, oil=10, hard=0.6, ap=1.0, dom=1, vg=0.6, vs=1.0, va=0.3), "sub": dict(steel=18, oil=8, ap=1.5, dom=1, vg=0.0, vs=1.3, va=0.0),
+    "cvn": dict(steel=40, oil=16, rare=3, hard=0.4, ap=1.0, dom=1, vg=1.0, vs=1.0, va=0.6),
+    "ftr": dict(steel=8, oil=10, rare=1, ap=0.6, dom=2, vg=0.35, vs=0.3, va=1.0), "bmr": dict(steel=12, oil=14, rare=1, ap=1.0, supp=3.0, dom=2, vg=1.0, vs=0.8, va=0.1),
 }
 for _c, _u in UNITS.items():
-    _u.update(dict(steel=0, oil=0, rare=0, hard=0.0, ap=0.5, supp=1.0)); _u.update(EXTRA[_c])
+    _u.update(dict(steel=0, oil=0, rare=0, hard=0.0, ap=0.5, supp=1.0, dom=0, vg=1.0, vs=0.6 if _c in ("art", "rkt") else 0.2, va=0.0)); _u.update(EXTRA[_c])
 DEPOSIT = dict(steel=(0.11, 2, 5), oil=(0.07, 2, 5), rare=(0.04, 1, 3), coal=(0.09, 2, 5), rubber=(0.05, 2, 4))      # share of land provinces with a deposit, daily yield range
 
 # ---- upgrades (v5). A faction researches LINES; every line has up to TECH_LEVELS levels, each costing resources and
@@ -88,7 +98,10 @@ NOTES = dict(inf="line infantry", mil="militia: cheap, slow, holds ground only",
              cav="cavalry: fast, cheap, needs no oil, weak against armour", grn="assault infantry: strong attack, ignores 20% of forts",
              atg="anti-tank guns: weak fire, but x2.5 against armour", mec="mechanised infantry: fast, half armoured",
              hvt="heavy armour: very strong, fully armoured, slow and costly, poor in rough ground",
-             rkt="rocket artillery: range 10, heavy suppression, ignores 30% of forts, fragile")
+             rkt="rocket artillery: range 10, heavy suppression, ignores 30% of forts, fragile",
+             shp="warship: fights ships, shells the coast, cuts enemy sea supply and sinks troops at sea", sub="submarine: strong against ships, cannot hit land",
+             cvn="aircraft carrier: its air group reaches 10 cells against ships, land and aircraft", ftr="fighter: shoots down aircraft, strafes a little, sight 3",
+             bmr="bomber: heavy fire on ground units and ships far behind the front, ignores 50% of forts")
 FACTIONS = {
     "aurum": dict(blurb="Aurum Compact: defence +10%, speed -10%.",
                   names=dict(inf="Line Brigade", mil="Levy", mtn="Crag Guard", mot="Road Legion", arm="Iron Column",
@@ -144,7 +157,8 @@ FORT_NAMES = ("none", "trench", "bunkers", "fortress")
 
 
 GENERIC = dict(inf="Infantry", mil="Militia", mtn="Mountain Troops", mot="Motorised", arm="Armour", art="Artillery", eng="Engineers", rec="Scouts",
-               cav="Cavalry", grn="Assault Infantry", atg="Anti-tank Guns", mec="Mechanised Infantry", hvt="Heavy Armour", rkt="Rocket Artillery")
+               cav="Cavalry", grn="Assault Infantry", atg="Anti-tank Guns", mec="Mechanised Infantry", hvt="Heavy Armour", rkt="Rocket Artillery",
+               shp="Warship", sub="Submarine", cvn="Carrier", ftr="Fighter", bmr="Bomber")
 for _w in WORLD:
     FACTIONS[_w[0]] = dict(blurb="%s (capital %s): %s." % (_w[0].capitalize(), _w[1], DOCTRINES[_w[4]]), names=GENERIC, doctrine=_w[4])
 FACTIONS["aurum"]["doctrine"] = "bulwark"; FACTIONS["sable"]["doctrine"] = "drift"; FACTIONS["cinder"]["doctrine"] = "ember"
@@ -164,7 +178,7 @@ def stats_for(faction):
             s["atk"] = round(s["atk"] * 1.1, 1); s["cost"] = int(round(s["cost"] * 1.05))
         s["cost"] = max(1, int(round(s["cost"] * UNIT_SCALE))); s["mp"] = max(1, int(round(s["mp"] * UNIT_SCALE))); s["upkeep"] = round(s["upkeep"] * UNIT_SCALE, 3)
         for k in ("steel", "oil", "rare"): s[k] = int(round(s[k] * UNIT_SCALE)) if s[k] else 0
-        s["range"] = RANGE[code]
+        s["range"] = RANGE[code]; s["fuel"] = FUEL.get(code, 0.0); s["gen"] = 0
         s["name"] = FACTIONS[fname]["names"].get(code, GENERIC[code])
         out[code] = s
     return out
@@ -177,7 +191,7 @@ SUPPORT = 0.25
 FRONT_DEPTH = 2
 
 # ---- unit-level movement and fire (v3). Distances are in map cells; neighbouring key points are about SPAN apart.
-RANGE = dict(inf=3.0, mil=2.5, mtn=3.0, mot=3.0, arm=3.5, art=9.0, eng=2.5, rec=3.0, cav=2.5, grn=3.0, atg=4.0, mec=3.0, hvt=3.5, rkt=10.0)    # firing range of each unit type
+RANGE = dict(inf=3.0, mil=2.5, mtn=3.0, mot=3.0, arm=3.5, art=9.0, eng=2.5, rec=3.0, cav=2.5, grn=3.0, atg=4.0, mec=3.0, hvt=3.5, rkt=10.0, shp=6.0, sub=3.0, cvn=10.0, ftr=4.0, bmr=4.0)    # firing range of each unit type
 SPAN = 5.7              # a unit crosses SPAN cells in the province's move-cost hours
 SLOT = 0.45             # spacing of units formed up around a point (cells): big groups take up real room
 CAP_R = 1.5             # a unit this close to a province's key point holds it...
@@ -246,7 +260,7 @@ HUB_LOAD = 30.0; HUB_LOAD_CITY = 60.0     # what one depot can push out at full 
 
 # v8: engines need fuel. Oil burned per day by every unit of these types (already x UNIT_SCALE); with the oil stock at zero they
 # fire at FUEL_OUT of their power and do not regain readiness.
-FUEL = dict(mot=0.02, arm=0.05, mec=0.04, hvt=0.07, rkt=0.03)
+FUEL = dict(mot=0.02, arm=0.05, mec=0.04, hvt=0.07, rkt=0.03, shp=0.08, sub=0.04, cvn=0.12, ftr=0.06, bmr=0.09)
 FUEL_OUT = 0.6
 DEAL_MAX = 6            # standing deliveries a faction can have running with one other faction
 TRUCE_HOURS = 48        # when land changes hands by agreement, the two sides do not fight for this long (time to march out)
@@ -290,3 +304,16 @@ RIVER_BRIDGE = 1        # infrastructure level on both banks, both yours, at whi
 RDY_MARCH = -0.15       # readiness per hour marching through your own supplied land, out of contact (an administrative march); RDY_MOVE applies everywhere else
 RDY_RAIL = 0.0          # ... and where that province has infrastructure 1 or more (troops moved by rail arrive fresh)
 FORT_DECAY = 0.08       # fort levels lost per day in a province where no unit of its owner stands (unmanned works fall in)
+
+# ---- v11: sea and air
+SEA_COST = 9.0            # move cost of a sea zone (hours for speed 1; a zone is about 26 cells across)
+AIR_COST = 6.0            # the same for aircraft, over any ground
+EMBARK = 10.0             # extra hours to load troops on ships / land them
+SEA_SUPPLY_HOP = 2.0      # a sea zone counts as this many steps for supply carried by ship
+AT_SEA_DFN = 3.0          # troops on transports: helpless (cannot fire, this defence value)
+WAR_HOURS = 720           # two factions count as at war for this long after the last real attack, strike or declaration between them
+AIR_BURN = 4.0            # readiness an aircraft burns per hour away from its base (it turns back at AIR_HOME)
+AIR_REST = 5.0            # readiness regained per hour on the ground at its base
+AIR_HOME = 35
+STRIKE = dict(res=260, oil=40, rare=12)      # one long-range missile
+STRIKE_HOURS = 6; STRIKE_DMG = 22.0          # hours of flight; strength taken from every unit in the province (forts halve it)

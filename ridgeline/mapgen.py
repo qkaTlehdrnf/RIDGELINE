@@ -6,7 +6,7 @@ from . import data as D
 
 
 class Prov:
-    __slots__ = ("id", "terrain", "elev", "y", "mp", "city", "nbrs", "cx", "cy", "cells", "cost", "dfn", "biome", "sea", "name", "steel", "oil", "rare", "coal", "rubber", "lat", "river")
+    __slots__ = ("id", "terrain", "elev", "y", "mp", "city", "nbrs", "cx", "cy", "cells", "cost", "dfn", "biome", "sea", "name", "steel", "oil", "rare", "coal", "rubber", "lat", "river", "coast", "deep", "lane")
 
     def __init__(self, id):
         self.id = id; self.terrain = "plain"; self.elev = 0; self.y = 0; self.mp = 0; self.city = False
@@ -14,6 +14,9 @@ class Prov:
         self.steel = self.oil = self.rare = self.coal = self.rubber = 0; self.lat = 30.0   # latitude (only the world map has a real one)     # daily yield of the deposit here, if any
         self.biome = ""             # "" temperate, "desert", "tundra": harsh ground (poor, slow, supplies arrive at half speed)
         self.river = frozenset()    # neighbours on the far bank of a great river (world map)
+        self.coast = ()             # land province: the sea zones it touches; sea zone: the land provinces on its shore
+        self.deep = False           # sea zone out of sight of land (needs ocean-going ships)
+        self.lane = frozenset()     # sea links that are long open-water crossings (need ocean-going ships)
         self.sea = ()               # neighbours reached across water (a strait or a sea lane), a subset of nbrs
         self.name = ""              # real-world place name where there is one (world map cities)
 
@@ -21,7 +24,7 @@ class Prov:
 class Map:
     def __init__(self):
         self.gw = self.gh = 0; self.cell = []; self.provs = []; self.seed = 0
-        self.capitals = []; self.start_provs = []; self.start_units = []; self.start_res = []; self.start_mp = []; self.scale = 1.0; self.world = False; self.names = []; self.start_bank = []
+        self.capitals = []; self.start_provs = []; self.start_units = []; self.start_res = []; self.start_mp = []; self.scale = 1.0; self.world = False; self.names = []; self.start_bank = []; self.seacell = None; self.sea0 = 0
 
 
 def gen_map(seed=0, gw=504, gh=312, cols=88, rows=56, players=3):

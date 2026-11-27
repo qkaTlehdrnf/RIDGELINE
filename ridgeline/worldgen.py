@@ -303,6 +303,59 @@ def _geography(scale):
     return geo
 
 
+SEA_STEP = 26        # sea zones are seeded on a grid this many cells apart
+
+
+def _seazones(geo, scale):
+    """Seed-independent: the water cut into zones. Returns (zone of every cell or -1, [(cx, cy)], adjacency sets, coast sets (land provinces))."""
+    f = os.path.join(tempfile.gettempdir(), "ridgeline_sea_v%d_%s.pickle" % (VERSION, scale))
+    if os.path.exists(f):
+        try: return pickle.load(open(f, "rb"))
+        except Exception: pass
+    gw, gh, cell = geo["gw"], geo["gh"], geo["cell"]; zone = [-1] * (gw * gh); ctr = []; q = []
+    st = max(8, int(SEA_STEP * scale ** 0.5))
+    for y in range(st // 2, gh, st):
+        for x in range(st // 2 + (st // 2 if (y // st) % 2 else 0), gw, st):
+            k = y * gw + x
+            if cell[k] == 0: zone[k] = len(ctr); ctr.append((x + 0.5, y + 0.5)); q.append(k)
+    j = 0
+    while j < len(q):
+        k = q[j]; j += 1; x = k % gw; z = zone[k]
+        for nk in (k - 1 if x else -1, k + 1 if x < gw - 1 else -1, k - gw, k + gw):
+            if 0 <= nk < gw * gh and cell[nk] == 0 and zone[nk] < 0: zone[nk] = z; q.append(nk)
+    adj = [set() for _ in ctr]; coast = [set() for _ in ctr]
+    for k in range(gw * gh):
+        z = zone[k]
+        if z < 0: continue
+        x = k % gw
+        for nk in (k + 1 if x < gw - 1 else -1, k + gw):
+            if not (0 <= nk < gw * gh): continue
+            if cell[nk] == 0:
+                z2 = zone[nk]
+                if z2 >= 0 and z2 != z: adj[z].add(z2); adj[z2].add(z)
+            else: coast[z].add(cell[nk])
+        for nk in (k - 1 if x else -1, k - gw):
+            if 0 <= nk < gw * gh and cell[nk] != 0: coast[z].add(cell[nk])
+    out = (zone, ctr, [sorted(a) for a in adj], [sorted(c) for c in coast])
+    try: pickle.dump(out, open(f, "wb"), 4)
+    except Exception: pass
+    return out
+
+
+def _sea(m, geo, scale):
+    """Append the sea zones to the map as water provinces. Land provinces keep their neighbour lists; the shore is in Prov.coast."""
+    zone, ctr, adj, coast = _seazones(geo, scale); n0 = len(m.provs); m.sea0 = n0
+    m.seacell = [z + n0 if z >= 0 else -1 for z in zone]
+    for z, (cx, cy) in enumerate(ctr):
+        p = Prov(n0 + z); p.terrain = "water"; p.cost = D.SEA_COST; p.dfn = 1.0; p.cx, p.cy = cx, cy; p.cells = 1; p.lat = round(LAT_N - cy * geo["deg"], 1)
+        p.nbrs = [n0 + a for a in adj[z]]; p.coast = tuple(c for c in coast[z] if m.provs[c].terrain != "water"); p.deep = not p.coast; p.y = 0; p.mp = 0
+        m.provs.append(p)
+    for z in range(len(ctr)):
+        for c in m.provs[n0 + z].coast: m.provs[c].coast += (n0 + z,)
+    for p in m.provs[:n0]:                      # long sea links are ocean crossings
+        if p.sea: p.lane = frozenset(b for b in p.sea if math.hypot(p.cx - m.provs[b].cx, p.cy - m.provs[b].cy) > 2.2 * D.SPAN * 2)
+
+
 def gen_world(seed=0, scale=1.0, factions=None):
     """World map for the factions named (default: all of data.WORLD, about 30). scale 0.5 gives a quarter of the provinces."""
     geo = _geography(scale); rng = random.Random(seed * 104729 + 7)
@@ -318,7 +371,7 @@ def gen_world(seed=0, scale=1.0, factions=None):
         p.y = rng.randint(0, 1) if p.biome else rng.randint(*tt["y"]); p.mp = 0 if p.biome else rng.randint(*tt["mp"])
         p.sea = tuple(geo["sea"][p.id]); p.nbrs = sorted(set(geo["adj"][p.id]) | set(p.sea))
     land = [p.id for p in m.provs if p.terrain != "water"]
-    _rivers(m, deg)
+    _rivers(m, deg); _sea(m, geo, scale)
 
     def at(lat, lon):
         x, y = (lon + 180.0) / deg, (LAT_N - lat) / deg
@@ -361,7 +414,7 @@ def gen_world(seed=0, scale=1.0, factions=None):
         got[pid].append(a)
         for b in m.provs[a].nbrs:
             if b not in claim and b not in m.provs[a].sea: claim[b] = (d + 1, pid); q.append(b)
-    kinds = ("inf", "inf", "inf", "inf", "mil", "mil", "mtn", "mot", "arm", "art", "art", "eng", "rec")
+    kinds = ("inf", "inf", "inf", "inf", "mil", "mil", "mil", "inf", "inf", "mil", "mil", "inf", "rec")       # the year 0: spearmen, levies, runners
     for pid in range(len(caps)):
         mine = got[pid]; m.start_provs.append(mine)
         k = int(rng.randint(400, 900) * max(0.2, scale ** 1.5))

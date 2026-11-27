@@ -8,13 +8,14 @@ import math
 import random
 
 from . import data as D
+from . import ages as A
 from .mapgen import gen_map
 
 
 class Unit:
     __slots__ = ("id", "owner", "type", "st", "prov", "path", "prog", "str", "group", "fighting", "supplied", "born",
                  "contact", "dig", "rdy", "plan_t", "plan_b", "dry", "x", "y", "ox", "oy", "last", "rout",
-                 "xp", "mor", "sup", "settled", "bk", "hours")
+                 "xp", "mor", "sup", "settled", "bk", "hours", "base")
 
     def __init__(self, id, owner, type, st, prov):
         self.id = id; self.owner = owner; self.type = type; self.st = st; self.prov = prov
@@ -26,6 +27,7 @@ class Unit:
         self.xp = float(st.get("xp0", 10))                 # experience 0-100: green, trained, regular, veteran, elite
         self.mor = float(D.MOR_NEW)                        # morale 0-100: breaks and runs when it gets too low
         self.sup = 0.0                                     # suppression 0-100: pinned down by incoming fire, shoots less
+        self.base = prov                                   # aircraft: the province it flies from
         self.settled = True; self.bk = None; self.hours = 0     # standing on its spot; grid bucket; hours spent in combat
 
 
@@ -62,6 +64,7 @@ class Player:
         self.mult = dict(res=1.0, steel=1.0, oil=1.0, rare=1.0, mp=1.0, flow=1.0, heal=1.0, plan=1.0, rest=1.0); self.mor0 = 0.0
         self._depth = {}; self._size = {}                   # HIDDEN: how far each line goes for this faction, and what each level is worth
         self.works = []; self.maint = 0.0; self.known_dev = {}   # [kind, prov, hours left] being built; res a day spent on keeping up cities and roads; {prov: (dev, infra)} last seen
+        self.spent = dict(units=0.0, research=0.0, works=0.0, refit=0.0, depots=0.0, missiles=0.0, upkeep=0.0); self.earned = 0.0    # res paid out so far, by purpose; res taken in so far
         self.fxp = {}                                # formation experience per group name (0-100): units that fight together
 
 
@@ -76,6 +79,10 @@ class Game:
         self.map = m = gmap or gen_map(seed, players=len(factions))
         self.seed = seed; self.rng = random.Random(seed * 7919 + 13)
         self.provs = m.provs; self.n = len(m.provs)
+        self.sea0 = getattr(m, "sea0", 0) or self.n; self.seacell = getattr(m, "seacell", None)      # sea zones are the provinces from sea0 on
+        self.nb2 = [list(p.nbrs) + [c for c in p.coast if c not in p.nbrs] for p in m.provs]         # neighbours including the shore (land <-> sea zone)
+        self.ages = bool(getattr(m, "world", False))                                                 # the 2,000-year tree (world map); small maps start modern
+        self.hostile = {}; self.strikes = []; self._seadirty = True                                  # (a, b) -> hour of the last hostile act; missiles in flight
         self.stock_hop = D.STOCK_HOP / m.scale          # bigger maps: supply reaches proportionally further
         self.tick = 0; self.max_ticks = max_ticks; self.over = False; self.winner = None
         self.owner = [-1] * self.n
@@ -104,6 +111,9 @@ class Game:
             if bank: p.bank = {k: float(bank[p.id].get(k, 0)) for k in D.STRAT}
             la = abs(self.provs[p.capital].lat); p.hardy = la >= D.HARDY_LAT or self.provs[p.capital].biome == "tundra"; p.tropic = la < D.TROPIC_LAT or not getattr(m, "world", False)
             self.hide_tech(p, seed * 9973 + p.id * 101 + 17)
+            if self.ages: A.setup(self, p, random.Random(seed * 7907 + p.id * 211 + 3))
+            else: A.modern(p)
+        self.blockade = [set() for _ in self.players]; self.searange = [{} for _ in self.players]
         for i, pr in enumerate(self.provs):
             if pr.city: self.dev[i] = D.DEV_START_CITY
         for p in self.players: self.dev[p.capital] = D.DEV_START_CAPITAL
@@ -112,7 +122,7 @@ class Game:
         for p in self.players:
             for (t, at) in m.start_units[p.id]:
                 u = self.spawn(p.id, t, at); u.xp = min(60.0, u.xp + r.uniform(0, 30)); u.mor = r.uniform(60, 80)   # armies start uneven
-        self._supply(); self._vision()
+        self._sea_update(); self._supply(); self._vision()
 
     # ---------------------------------------------------------------- indexes (what makes many units affordable)
     def _index(self):
@@ -167,6 +177,7 @@ class Game:
     def _enter(self, u, prov):
         """Unit u steps into another province."""
         self._look(u, -1); self.pos[u.prov].remove(u); self.pos[prov].append(u); u.last = u.prov; u.prov = prov; self._look(u, 1)
+        if u.st["dom"] == 1: self._seadirty = True
 
     def _set_owner(self, q, new):
         old = self.owner[q]
@@ -197,11 +208,94 @@ class Game:
     # ---------------------------------------------------------------- basics
     def spawn(self, pid, code, prov):
         u = Unit(self.next_id, pid, code, self.players[pid].stats[code], prov); self.next_id += 1
-        u.born = self.tick
+        u.born = self.tick; u.base = prov
+        if u.st["dom"] == 1: prov = u.prov = self.port_zone(prov); self._seadirty = True
         self._slot(u, sum(1 for o in self.pos[prov] if o.owner == pid)); self.pos[prov].append(u)
         pr = self.provs[prov]; u.x = pr.cx + u.ox; u.y = pr.cy + u.oy
         self._add(u); p = self.players[pid]; p.upkeep += u.st["upkeep"]; p.n_units += 1
         return u
+
+    def port_zone(self, prov):
+        """Sea zone a ship built at (or tied up at) this coastal province lies in."""
+        c = self.provs[prov].coast
+        return c[0] if c and prov < self.sea0 else prov
+
+    def war(self, a, b):
+        """Are a and b at war? Yes for WAR_HOURS after the last real attack, strike or declaration between them (never under a pact)."""
+        t = self.hostile.get((a, b) if a < b else (b, a))
+        return t is not None and self.tick - t < D.WAR_HOURS and (a, b) not in self.peace
+
+    def set_war(self, a, b):
+        if a == b or a < 0 or b < 0: return
+        k = (a, b) if a < b else (b, a)
+        if not self.war(a, b):
+            self._seadirty = True
+            for x, y in ((a, b), (b, a)): self.event(x, "news", "you are now at war with P%d (%s)" % (y, self.players[y].faction), key=("war", y), gap=240)
+        self.hostile[k] = self.tick
+
+    def order_declare(self, pid, to):
+        if to == pid or not (0 <= to < len(self.players)) or not self.players[to].alive: return "no such faction"
+        if (pid, to) in self.peace: return "you have a pact with P%d (break it first)" % to
+        self.set_war(pid, to); return None
+
+    def order_strike(self, pid, prov):
+        p = self.players[pid]
+        if not p.missile: return "you have no missiles (discovery: ballistic_missiles)"
+        if not (0 <= prov < self.n) or prov not in p.visible: return "P%d is not in sight" % prov
+        if self.owner[prov] == pid: return "P%d is yours" % prov
+        if (pid, self.owner[prov]) in self.peace: return "P%d belongs to a faction you have a pact with" % prov
+        for k, v in D.STRIKE.items():
+            have = p.res if k == "res" else p.bank[k]
+            if have < v: return "need %d %s (have %d)" % (v, k, have)
+        for k, v in D.STRIKE.items():
+            if k == "res": p.res -= v; p.spent["missiles"] += v
+            else: p.bank[k] -= v
+        self.strikes.append([self.tick + D.STRIKE_HOURS, pid, prov]); return None
+
+    def _strikes(self):
+        for s in list(self.strikes):
+            if s[0] > self.tick: continue
+            self.strikes.remove(s); t, pid, q = s; o = self.owner[q]; n = 0
+            div = 1.0 + 0.5 * self.fort_level(q)
+            for u in list(self.pos[q]):
+                if u.owner == pid or (u.owner, pid) in self.peace: continue
+                u.str -= D.STRIKE_DMG / div * self.rng.uniform(0.7, 1.3); u.sup = 100.0; u.mor = max(0.0, u.mor - 15.0); self.active.add(u.id); n += 1
+                self.set_war(pid, u.owner)
+                if u.str <= 0: self._die(u, pid)
+            if q < self.sea0:
+                self.stock[q] *= 0.5
+                if self.infra[q] > 0 or self.dev[q] > 0: self.infra[q] = max(0.0, self.infra[q] - 0.5); self.dev[q] = max(0.0, self.dev[q] - 0.3); self._roads(q)
+            if o >= 0 and o != pid: self.set_war(pid, o); self.event(o, "battle", "MISSILE STRIKE on P%d by P%d" % (q, pid))
+            self.event(pid, "battle", "missile hit P%d (%d units in it)" % (q, n))
+
+    def _sea_update(self):
+        """Every 6 hours: which sea zones each faction's shipping can use. A zone is closed to a faction while a warship of a
+        faction at war with it lies there and none of its own; deep water needs ocean-going ships; reach counts from the home coast."""
+        self._seadirty = False; S0 = self.sea0
+        if S0 >= self.n: return
+        ships = {}
+        for z in range(S0, self.n):
+            for u in self.pos[z]:
+                if u.st["dom"] == 1: ships.setdefault(z, set()).add(u.owner)
+        for p in self.players:
+            if not p.alive: continue
+            blk = set(z for z, os in ships.items() if p.id not in os and any(self.war(p.id, o) for o in os))
+            rng = {}
+            if p.sail > 0:
+                q = []
+                for i in self.owned[p.id]:
+                    for z in self.provs[i].coast:
+                        if z not in rng and z not in blk: rng[z] = 1; q.append(z)
+                j = 0; R = p.sea_reach
+                while j < len(q):
+                    a = q[j]; j += 1; d = rng[a]
+                    if d >= R: continue
+                    for b in self.provs[a].nbrs:
+                        if b in rng or b in blk: continue
+                        if self.provs[b].deep and not p.ocean: continue
+                        rng[b] = d + 1; q.append(b)
+            if blk != self.blockade[p.id] or rng.keys() != self.searange[p.id].keys(): self.sdirty[p.id] = True
+            self.blockade[p.id] = blk; self.searange[p.id] = rng
 
     def _slot(self, u, k):
         """Place k in a sunflower spiral around the point the unit is sent to: groups occupy real space."""
@@ -228,7 +322,9 @@ class Game:
         return self.owner[a] == pid and self.owner[b] == pid and self.infra[a] >= D.RIVER_BRIDGE and self.infra[b] >= D.RIVER_BRIDGE
 
     def move_cost(self, u, prov):
-        pr = self.provs[prov]
+        pr = self.provs[prov]; dom = u.st["dom"]
+        if dom == 2: return D.AIR_COST / u.st["spd"]
+        if prov >= self.sea0: return D.SEA_COST / (u.st["spd"] if dom else max(0.5, self.players[u.owner].sail))
         return pr.cost / u.st["spd"] * (u.st["climb"] if pr.terrain in D.HIGH else 1.0) * (D.COLD_MOVE if prov in self.cold else 1.0) / (1.0 + D.INFRA_MOVE * self.infra[prov])
 
     def season_at(self, tick, lat=1.0):
@@ -266,6 +362,8 @@ class Game:
         dist = {src: 0.0}; prev = {}; provs = self.provs; done = set()
         tx, ty = provs[dst].cx, provs[dst].cy; k = 2.2 / (unit.st["spd"] if unit else 1.0)     # A*: hours per cell on the cheapest ground (close to admissible)
         heap = [(0.0, src)]
+        if unit is not None and (unit.st["dom"] or src >= self.sea0 or (own is None and self.players[unit.owner].sail > 0 and self.sea0 < self.n)):
+            return self._path_x(src, dst, unit, known)
         while heap:
             f, a = heapq.heappop(heap)
             if a == dst: break
@@ -274,10 +372,44 @@ class Game:
             for b in provs[a].nbrs:
                 if own is not None and self.owner[b] != own: continue
                 if known is not None and b not in known and b != dst: continue
+                if b in provs[a].lane and not (unit and self.players[unit.owner].ocean): continue
                 nd = d + (self.move_cost(unit, b) if unit else provs[b].cost)
                 if b in provs[a].river and self.river(a, b) and not (unit and self.bridged(unit.owner, a, b)): nd += provs[a].cost * 0.5 * (1.0 / D.RIVER_MOVE - 1.0) / (unit.st["spd"] if unit else 1.0)
                 if nd < dist.get(b, 1e18):
                     dist[b] = nd; prev[b] = a; pb = provs[b]
+                    heapq.heappush(heap, (nd + k * ((pb.cx - tx) ** 2 + (pb.cy - ty) ** 2) ** 0.5, b))
+        if dst not in prev: return None
+        out = [dst]
+        while out[-1] != src: out.append(prev[out[-1]])
+        out.pop(); out.reverse()
+        return out
+
+    def _path_x(self, src, dst, unit, known=None):
+        """Routes for ships (sea zones only), aircraft (anything) and troops that may go by sea (land, shore, sea zones, shore, land)."""
+        provs = self.provs; S0 = self.sea0; dom = unit.st["dom"]; p = self.players[unit.owner]; ocean = p.ocean; rngz = self.searange[p.id]
+        dist = {src: 0.0}; prev = {}; done = set(); tx, ty = provs[dst].cx, provs[dst].cy; sp = D.SPAN
+        k = (D.AIR_COST if dom == 2 else D.SEA_COST) / (unit.st["spd"] if dom else max(unit.st["spd"], p.sail, 0.5)) / sp * 0.9
+        heap = [(0.0, src)]; emb = D.EMBARK
+        while heap:
+            f, a = heapq.heappop(heap)
+            if a == dst: break
+            if a in done: continue
+            done.add(a); d = dist[a]; pa = provs[a]; wa = a >= S0
+            for b in (self.nb2[a] if dom != 1 else pa.nbrs):
+                wb = b >= S0
+                if dom == 1 and not wb: continue
+                if dom != 2:
+                    if wb and provs[b].deep and not ocean: continue
+                    if dom == 0:
+                        if wb and (p.sail <= 0 or b not in rngz) and b != dst: continue
+                        if not wb and not wa and b in pa.lane and not ocean: continue
+                        if known is not None and b not in known and b != dst and not wb: continue
+                pb = provs[b]; nd = d + self.move_cost(unit, b) * (max(1.0, ((pa.cx - pb.cx) ** 2 + (pa.cy - pb.cy) ** 2) ** 0.5 / sp) if (wb or wa or dom == 2) else 1.0)
+                if dom == 0:
+                    if wa != wb: nd += emb
+                    elif not wb and b in pa.river and self.river(a, b) and not self.bridged(unit.owner, a, b): nd += pa.cost * 0.5 * (1.0 / D.RIVER_MOVE - 1.0) / unit.st["spd"]
+                if nd < dist.get(b, 1e18):
+                    dist[b] = nd; prev[b] = a
                     heapq.heappush(heap, (nd + k * ((pb.cx - tx) ** 2 + (pb.cy - ty) ** 2) ** 0.5, b))
         if dst not in prev: return None
         out = [dst]
@@ -311,10 +443,14 @@ class Game:
         """known: the set of provinces the player has explored; routes then use only those (plus the destination)."""
         us = self._mine(pid, ids)
         if not us: return "no units selected"
-        if not (0 <= dst < self.n) or self.provs[dst].terrain == "water": return "P%d is not land" % dst
-        bad = 0; cache = {}; k = sum(1 for o in self.pos[dst] if o.owner == pid and not o.path)
+        if not (0 <= dst < self.n) or (self.provs[dst].terrain == "water" and dst < self.sea0): return "P%d is not land" % dst
+        bad = 0; cache = {}; k = sum(1 for o in self.pos[dst] if o.owner == pid and not o.path); sea = dst >= self.sea0
         for u in us:
-            start = u.prov
+            start = u.prov; dom = u.st["dom"]
+            if (dom == 0 and sea) or (dom == 1 and not sea): bad += 1; continue        # troops are ordered to land, ships to sea zones
+            if dom == 2:
+                if sea or self.owner[dst] != pid: u.plan_t = dst                       # a sortie: it fights over that province, then flies home
+                elif dst in self.players[pid].supplied: u.base = dst; u.plan_t = -1    # own supplied land: it moves its base there
             key = (start, u.type)
             if key not in cache:
                 r = self.path(start, dst, u, pid if own_only else None)
@@ -326,6 +462,7 @@ class Game:
             if not p and u.prov == dst: p = [dst]            # already there: walk back to the key point
             u.path = list(p); u.dig = False; u.rout = False; u.settled = False; self.active.add(u.id)
             if not (u.prov == dst and not u.fighting): self._slot(u, k); k += 1
+            if dom == 2: continue
             if not (u.plan_t == dst and len(p) == 1): u.plan_t = -1; u.plan_b = 0.0     # a prepared attack only fits its target
         return "%d unit(s) cannot reach P%d" % (bad, dst) if bad else None
 
@@ -336,7 +473,7 @@ class Game:
         n = 0
         if (pid, self.owner[target]) in self.peace: return "P%d belongs to a faction you have a pact with (break it first)" % target
         for u in us:
-            if target not in self.provs[u.prov].nbrs: continue
+            if target not in self.nb2[u.prov] or u.st["dom"] == 2: continue
             u.path = []; u.prog = 0.0; u.rout = False; u.settled = False; self.active.add(u.id)
             if u.plan_t != target: u.plan_t = target; u.plan_b = 0.0
             n += 1
@@ -390,7 +527,20 @@ class Game:
 
     def order_research(self, pid, line):
         p = self.players[pid]
+        if line in A.TREE:
+            st = A.status(self, pid, line)
+            if st != "open": return "%s is %s" % (line, "locked: it needs %s first" % ", ".join(r for r in A.TREE[line][1] if r not in p.known) if st == "locked" else st)
+            if len(p.research) >= D.TECH_SLOTS: return "all %d research slots are busy" % D.TECH_SLOTS
+            cost = A.cost(self, pid, line)
+            for k, v in cost.items():
+                have = p.res if k == "res" else p.bank[k]
+                if have < v: return "need %d %s (have %d)" % (v, k, have)
+            for k, v in cost.items():
+                if k == "res": p.res -= v; p.spent["research"] += v
+                else: p.bank[k] -= v
+            p.research.append([line, 0, A.HOURS[A.TREE[line][0]]]); return None
         if line not in p._depth: return "unknown line '%s' (see 'q tech')" % line
+        if "." in line and line.split(".")[0] not in p.stats: return "you cannot raise %s yet, so there is nothing to improve" % line.split(".")[0]
         lv, st = self.tech_status(pid, line)
         if st != "open": return "%s is %s" % (line, "already being researched" if st == "researching" else st)
         if len(p.research) >= D.TECH_SLOTS: return "all %d research slots are busy" % D.TECH_SLOTS
@@ -399,13 +549,15 @@ class Game:
             have = p.res if k == "res" else p.bank[k]
             if have < v: return "need %d %s (have %d)" % (v, k, have)
         for k, v in cost.items():
-            if k == "res": p.res -= v
+            if k == "res": p.res -= v; p.spent["research"] += v
             else: p.bank[k] -= v
         p.research.append([line, lv + 1, D.TECH_HOURS * (lv + 1)])
         return None
 
     def _finish_research(self, p, line, level):
         """The moment of truth: only now does the faction learn whether the line went any further."""
+        if line in A.TREE:
+            text = A.finish(self, p, line); p.tech_log.append(dict(t=self.tick, line=line, level=0, ok=True, gain=0.0, text=text)); self.event(p.id, "tech", text); return
         if level > p._depth[line]:
             p.dead.add(line); text = "%s level %d: DEAD END, nothing gained, the line is closed" % (line, level)
             p.tech_log.append(dict(t=self.tick, line=line, level=level, ok=False, gain=0.0, text=text)); self.event(p.id, "tech", text); return
@@ -413,6 +565,7 @@ class Game:
         if "." in line:
             code, kind = line.split("."); stat = D.TECH_UNIT[kind]["stat"]
             st = dict(p.stats[code]); st["mark"] += 1; p.stats[code] = st; p.marks[code].append(st)   # a new model: units already in the field stay as they are
+            lm = p.lmul.setdefault(code, {}); lm[stat] = lm.get(stat, 1.0) * (1.0 + x)
             st[stat] = round(st[stat] * (1.0 + x), 3); what = "%s %s +%d%%" % (code, stat, round(x * 100))
             if stat == "spd": self._pfree.clear(); self._pown.clear()
         elif line == "farming": p.mult["res"] *= 1 + x; what = "res yield +%d%%" % round(x * 100)
@@ -424,13 +577,16 @@ class Game:
         elif line == "medicine": p.mult["heal"] *= 1 + 3 * x; what = "strength recovery +%d%%" % round(300 * x)
         elif line == "staffwork": p.mult["plan"] *= 1 + 3 * x; what = "prepared-attack build-up +%d%%" % round(300 * x)
         elif line == "drill":
+            p.gadd["xp0"] += round(x * 100)
             for st in p.all_stats(): st["xp0"] += round(x * 100)
             what = "new units start with +%d experience" % round(x * 100)
         elif line == "fieldworks":
+            p.gmul["dig"] *= 1 + 3 * x
             for st in p.all_stats(): st["dig"] = round(st["dig"] * (1 + 3 * x), 3)
             what = "fort building +%d%%" % round(300 * x)
         elif line == "discipline": p.mor0 += round(x * 100); p.mult["rest"] *= 1 + 2 * x; what = "new units +%d morale, morale recovery +%d%%" % (round(x * 100), round(200 * x))
         elif line == "industry":
+            p.gmul["cost"] *= 1 - x
             for st in p.all_stats(): st["cost"] = max(1, int(round(st["cost"] * (1 - x))))
             what = "unit res cost -%d%%" % round(x * 100)
         else: what = "?"
@@ -640,12 +796,14 @@ class Game:
         cur = p.stats[u.type]
         if u.st is cur: return "%s#%d is already the current model" % (u.type, u.id)
         if u.fighting or u.rout: return "%s#%d is in combat" % (u.type, u.id)
-        if self.owner[u.prov] != pid or u.prov not in p.supplied: return "%s#%d must stand on your own supplied land" % (u.type, u.id)
+        if u.st["dom"] == 1:
+            if not any(self.owner[c] == pid and c in p.supplied for c in self.provs[u.prov].coast): return "%s#%d must lie off your own supplied coast" % (u.type, u.id)
+        elif self.owner[u.prov] != pid or u.prov not in p.supplied or u.path: return "%s#%d must stand on your own supplied land" % (u.type, u.id)
         c = self.refit_cost(pid, u.type); b = p.bank
         if p.res < c["res"]: return "need %d res (have %d)" % (c["res"], p.res)
         for k in ("steel", "oil", "rare"):
             if b[k] < c[k]: return "need %d %s (have %d)" % (c[k], k, b[k])
-        p.res -= c["res"]
+        p.res -= c["res"]; p.spent["refit"] += c["res"]
         for k in ("steel", "oil", "rare"): b[k] -= c[k]
         p.upkeep += cur["upkeep"] - u.st["upkeep"]; u.st = cur; u.rdy = max(0.0, u.rdy - D.REFIT_RDY); self.active.add(u.id)
         return None
@@ -653,18 +811,24 @@ class Game:
     def order_recruit(self, pid, code, prov=None):
         p = self.players[pid]
         if code not in D.UNITS: return "unknown unit '%s'" % code
-        if prov is None: prov = p.capital
+        if code not in p.stats: return "%s is not discovered yet (discovery: %s)" % (code, A.OPENED_BY.get(code))
+        if prov is None:
+            prov = p.capital
+            if p.stats[code]["dom"] == 1 and not self.provs[prov].coast:        # ships need a harbour: the nearest own coastal city
+                cs = [i for i in self.owned[pid] if self.provs[i].city and self.provs[i].coast and i in p.supplied]
+                if cs: prov = min(cs, key=lambda i: ((self.provs[i].cx - self.provs[p.capital].cx) ** 2 + (self.provs[i].cy - self.provs[p.capital].cy) ** 2, i))
         pr = self.provs[prov] if 0 <= prov < self.n else None
         if pr is None or self.owner[prov] != pid or not pr.city: return "P%d is not your city" % prov
         if prov not in p.supplied: return "P%d is cut off from your depots" % prov
         st = p.stats[code]
+        if st["dom"] == 1 and not pr.coast: return "P%d is not on the sea (ships are built in coastal cities)" % prov
         if p.res < st["cost"]: return "need %d res (have %d)" % (st["cost"], p.res)
         if p.mp < st["mp"]: return "need %d manpower (have %d)" % (st["mp"], p.mp)
         b = p.bank
         for k in ("steel", "oil", "rare"):
             if b[k] < st[k]: return "need %d %s (have %d)" % (st[k], k, b[k])
         for k in ("steel", "oil", "rare"): b[k] -= st[k]
-        p.res -= st["cost"]; p.mp -= st["mp"]; p.queue.append([code, prov, st["time"]])
+        p.res -= st["cost"]; p.spent["units"] += st["cost"]; p.mp -= st["mp"]; p.queue.append([code, prov, st["time"]])
         return None
 
     # ---------------------------------------------------------------- tick
@@ -672,6 +836,8 @@ class Game:
         if self.over: return
         self.tick += 1
         if self.tick % 24 == 1: self._seasons()
+        if self.strikes: self._strikes()
+        if self.tick % 6 == 0 and (self._seadirty or self.tick % 24 == 0): self._sea_update()
         self._diplomacy(); self._economy(); self._combat(); self._hourly(); self._move(); self._capture()
         self._close_assaults(); self._supply(); self._vision(); self._check_end()
 
@@ -758,7 +924,7 @@ class Game:
         res, k, n = self.dev_cost(prov) if kind == "dev" else self.infra_cost(prov)
         if p.res < res: return "need %d res (have %d)" % (res, p.res)
         if p.bank[k] < n: return "need %d %s (have %d)" % (n, k, p.bank[k])
-        p.res -= res; p.bank[k] -= n; p.works.append([kind, prov, D.DEV_HOURS if kind == "dev" else D.INFRA_HOURS]); return None
+        p.res -= res; p.spent["works"] += res; p.bank[k] -= n; p.works.append([kind, prov, D.DEV_HOURS if kind == "dev" else D.INFRA_HOURS]); return None
 
     def order_revoke(self, pid, to):
         """Close your roads to a faction you had opened them to (and theirs to you). Everyone who knows you hears of it."""
@@ -783,6 +949,7 @@ class Game:
                 for k in D.STRAT: dep[k] += getattr(pr, k)
             m = p.mult; p.income = y * m["res"]; p.mp_income = mp * m["mp"]
             p.res = max(0.0, p.res + (p.income - p.upkeep - p.maint) / 24.0); p.mp += p.mp_income / 24.0
+            p.earned += p.income / 24.0; p.spent["upkeep"] += (p.upkeep + p.maint) / 24.0
             for w in list(p.works):
                 w[2] -= 1
                 if w[2] <= 0:
@@ -794,7 +961,7 @@ class Game:
                     self.event(p.id, "built", "%s at P%d is now %.1f" % ("development" if w[0] == "dev" else "infrastructure", i, self.dev[i] if w[0] == "dev" else self.infra[i]))
             inc = p.inc; b = p.bank
             for k in D.STRAT: inc[k] = dep[k] * m.get(k, 1.0); b[k] += inc[k] / 24.0
-            if self.tick % 24 == 0: p.fuel = sum(D.FUEL.get(u.type, 0.0) for u in self.punits[p.id].values())
+            if self.tick % 24 == 0: p.fuel = sum(u.st["fuel"] for u in self.punits[p.id].values())
             b["oil"] -= p.fuel / 24.0
             if b["oil"] <= 0.0:
                 b["oil"] = 0.0
@@ -810,6 +977,7 @@ class Game:
                     p.queue.remove(q)
                     at = q[1] if self.owner[q[1]] == p.id else p.capital
                     if self.owner[at] != p.id or self.enemy_at(at, p.id): continue
+                    if p.stats[q[0]]["dom"] == 1 and not self.provs[at].coast: continue
                     u = self.spawn(p.id, q[0], at); u.rdy = float(D.RDY_NEW); u.mor = min(100.0, u.mor + p.mor0)
                     self.event(p.id, "ready", "%s#%d at P%d" % (u.type, u.id, at))
 
@@ -837,6 +1005,7 @@ class Game:
 
     def _unit_hour(self, u, k):
         stock = self.stock; p = self.players[u.owner]; pr = u.prov; fighting = u.fighting
+        if pr >= self.sea0 or u.st["dom"]: return self._hour_x(u, k)
         if fighting == 1: use = D.USE_ASSAULT; dr = D.RDY_ASSAULT
         elif fighting == 2: use = D.USE_DEFEND; dr = D.RDY_DEFEND
         elif u.path:
@@ -847,7 +1016,7 @@ class Game:
         use *= k; d = self.depot(u)
         if d >= 0 and stock[d] >= use: stock[d] -= use; u.dry = False
         else: u.dry = True; dr = min(dr, 0.0) - 0.3
-        if p.nofuel and dr > 0 and u.type in D.FUEL: dr = 0.0
+        if p.nofuel and dr > 0 and u.st["fuel"]: dr = 0.0
         u.rdy = max(0.0, min(100.0, u.rdy + dr * k))
         if u.plan_t >= 0:
             if fighting == 1: u.plan_b = max(0.0, u.plan_b - D.PLAN_DECAY)
@@ -889,11 +1058,77 @@ class Game:
         if u.dry: u.mor = max(0.0, u.mor - D.MOR_DRY * k)
         if u.dig and not u.path and fighting != 1 and self.owner[pr] == u.owner:
             lvl = self.fort_level(pr)
-            if lvl >= D.FORT_MAX: u.dig = False
+            if lvl >= p.fort_cap: u.dig = False
             else:
-                self.fort[pr] = min(float(D.FORT_MAX), self.fort[pr] + k * u.st["dig"] * (u.str / 100.0) / (D.FORT_HOURS * (lvl + 1)))
+                self.fort[pr] = min(float(p.fort_cap), self.fort[pr] + k * u.st["dig"] * (u.str / 100.0) / (D.FORT_HOURS * (lvl + 1)))
                 if self.fort_level(pr) > lvl:
                     self.event(u.owner, "fort", "P%d %s (level %d)" % (pr, D.FORT_NAMES[lvl + 1], lvl + 1))
+
+    def _hour_x(self, u, k):
+        """The hour of a ship, an aircraft, or troops at sea."""
+        p = self.players[u.owner]; pr = u.prov; dom = u.st["dom"]; fighting = u.fighting; provs = self.provs
+        if u.sup: u.sup = u.sup * D.SUP_DECAY if k == 1 and u.sup > 1.0 else 0.0
+        if dom == 2:
+            if self.owner[u.base] != u.owner:                    # its airfield is gone
+                b = p.capital
+                if b is None or b < 0 or self.owner[b] != u.owner: self._die(u, None); return
+                u.base = b
+            if pr == u.base and not u.path:
+                u.supplied = pr in p.supplied; u.dry = False
+                if not (p.nofuel and u.st["fuel"]): u.rdy = min(100.0, u.rdy + D.AIR_REST * k)
+                u.mor = min(100.0, u.mor + D.MOR_REST * k)
+                if u.str < 100 and u.supplied:
+                    gain = min(100.0 - u.str, D.REINFORCE * k * p.mult["heal"]); need = gain * u.st["mp"] / 100.0
+                    if p.mp >= need: p.mp -= need; u.str += gain
+                return
+            u.rdy = max(0.0, u.rdy - D.AIR_BURN * k)
+            if u.rdy <= 0.0:
+                u.str -= 10.0 * k
+                if u.str <= 0: self.event(u.owner, "lost", "%s#%d ran out of fuel and went down near P%d" % (u.type, u.id, pr), key="env", gap=24); self._die(u, None); return
+            if (u.rdy < D.AIR_HOME or (not u.path and not fighting)) and (not u.path or u.path[-1] != u.base):
+                r = self._path_x(pr, u.base, u) if pr != u.base else [u.base]
+                if r is not None: u.path = r; u.plan_t = -1; u.settled = False; self.active.add(u.id)
+            return
+        zone = pr >= self.sea0
+        home = zone and any(self.owner[c] == u.owner and c in p.supplied for c in provs[pr].coast)
+        near = home or pr in self.searange[u.owner] or not zone
+        was = u.supplied; u.supplied = near; u.dry = False
+        if dom == 0:                                             # troops on transports
+            if near: u.rdy = max(0.0, u.rdy - 0.2 * k)
+            else:
+                u.str -= D.ATTRITION * k; u.mor -= D.MOR_CUT * k
+                if was: self.event(u.owner, "nosupply", "%s#%d at sea in P%d is beyond the reach of your shipping" % (u.type, u.id, pr))
+                if u.str <= 0 or u.mor <= 0: self._die(u, None)
+            return
+        if fighting: dr = -1.0
+        elif u.path: dr = -0.1
+        elif home: dr = D.RDY_REST
+        else: dr = 0.2 if near else -0.5
+        if p.nofuel and u.st["fuel"] and dr > 0: dr = 0.0
+        u.rdy = max(0.0, min(100.0, u.rdy + dr * k))
+        if home and not fighting:
+            u.mor = min(100.0, u.mor + D.MOR_REST * k)
+            if u.str < 100:
+                gain = min(100.0 - u.str, D.REINFORCE * k * p.mult["heal"]); need = gain * u.st["mp"] / 100.0
+                if p.mp >= need: p.mp -= need; u.str += gain
+        elif not near:
+            u.str -= D.ATTRITION * 0.5 * k; u.mor -= D.MOR_CUT * k
+            if was: self.event(u.owner, "nosupply", "%s#%d in P%d is beyond the reach of your supply ships" % (u.type, u.id, pr))
+            if u.str <= 0: self._die(u, None)
+
+    def _xok(self, u, t):
+        """May u fire at t when one of them is not ordinary ground troops on land? Only between factions at war; aircraft on the
+        ground are out of it; ships and aircraft hit ground troops only in a province their side is attacking or that they were sent against."""
+        ts = t.st; td = ts["dom"]
+        if td == 2:
+            if not t.path and t.prov == t.base: return False
+        elif td == 0 and t.prov >= self.sea0: td = 1
+        us = u.st
+        if us["dom"] == 2 and td != 2 and not u.path and u.prov == u.base: return False
+        if (us["va"] if td == 2 else us["vs"] if td == 1 else us["vg"]) <= 0.0: return False
+        if not self.war(u.owner, t.owner): return False
+        if td == 0 and us["dom"] and u.plan_t != t.prov and (t.prov, u.owner) not in self.assaults: return False
+        return True
 
     def _ground(self, code, src, dst):
         """Fire multiplier from the ground alone: target terrain for this unit type, height difference, sea crossing."""
@@ -911,7 +1146,7 @@ class Game:
         m *= (1.0 - D.RDY_ATK + D.RDY_ATK * u.rdy / 100.0) * (D.DRY_MULT if u.dry else 1.0)
         m *= (D.XP_ATK0 + D.XP_ATK * u.xp / 100.0) * (1.0 - D.MOR_ATK + D.MOR_ATK * u.mor / 100.0) * (1.0 - D.SUP_FIRE * u.sup / 100.0)
         if u.plan_t == dst: m *= 1.0 + u.plan_b / 100.0
-        if u.type in D.FUEL and self.players[u.owner].nofuel: m *= D.FUEL_OUT
+        if u.st["fuel"] and self.players[u.owner].nofuel: m *= D.FUEL_OUT
         if t.terrain in D.ROUGH: m *= st["rough"]
         if t.terrain in D.HIGH: m *= st["high"]
         s = self.provs[src]
@@ -931,8 +1166,9 @@ class Game:
         Experience, morale, suppression and formation experience all act here (see data.py)."""
         B = D.BUCKET; grid = self.grid; units = self.units; provs = self.provs; owner = self.owner; players = self.players
         for u in self._hot: u.fighting = 0; u.contact = False
-        hot_units = self._hot = []
+        hot_units = self._hot = []; S0 = self.sea0; xok = self._xok
         mono = {k: (next(iter(c)) if len(c) == 1 else -2) for k, c in self.gown.items()}
+        self._warm = set()
         dmg = {}; kby = {}; fights = {}; con = set(); self.battles = {}; mates = {}; gfire = {}; act = self.active; tfc = self._tf; peace = self.peace; ass = self.assaults
         for (bx, by), me in mono.items():
             hot = me == -2
@@ -947,23 +1183,31 @@ class Game:
             for u in grid[(bx, by)]:
                 u.contact = True; hot_units.append(u)
                 if u.rout: continue
-                st = u.st; r = st["range"]; r2 = r * r; R = 1 if r <= B else 2
+                st = u.st; r = st["range"]; r2 = r * r; R = 1 if r <= B else 2; ux = st["dom"]
+                if u.prov >= S0:
+                    if not ux: continue                              # troops on transports cannot fight
+                    ux = ux or 1
+                elif ux == 2 and not u.path and u.prov == u.base and st["va"] < 0.5: continue      # aircraft on the ground (fighters still go up against raiders); r2 = r * r; R = 1 if r <= B else 2
                 fl = foes.get((u.owner, R))
                 if fl is None:
                     fl = foes[(u.owner, R)] = [t for dx in range(-R, R + 1) for dy in range(-R, R + 1)
                                               for t in grid.get((bx + dx, by + dy), ()) if t.owner != u.owner and (t.owner, u.owner) not in peace]
                 if not fl: continue
-                ux = u.x; uy = u.y; best = []
+                uxx = u.x; uy = u.y; best = []
                 if u.path or owner[u.prov] != u.owner:               # on the move, or standing on someone else's land: fights whatever is in reach
                     for t in fl:
-                        d = (t.x - ux) ** 2 + (t.y - uy) ** 2
-                        if d <= r2: best.append((d, t.id, t))
+                        d = (t.x - uxx) ** 2 + (t.y - uy) ** 2
+                        if d <= r2:
+                            if (ux or t.st["dom"] or t.prov >= S0) and not xok(u, t): continue
+                            best.append((d, t.id, t))
                 else:                                                # holding its own line: a quiet front stays quiet. It fires at what advances
                     uo = u.owner; upv = u.prov                       # or intrudes, and joins a battle that is already on (either way round)
                     for t in fl:
-                        if not t.path and owner[t.prov] == t.owner and (t.prov, uo) not in ass and (upv, t.owner) not in ass \
+                        if t.st["dom"] or t.prov >= S0:
+                            if not xok(u, t): continue
+                        elif not t.path and owner[t.prov] == t.owner and (t.prov, uo) not in ass and (upv, t.owner) not in ass \
                                 and u.plan_t != t.prov and t.plan_t != upv: continue      # (a prepared attack opens with its guns: units planning an attack on a province shell it, and are shelled back, when in range)
-                        d = (t.x - ux) ** 2 + (t.y - uy) ** 2
+                        d = (t.x - uxx) ** 2 + (t.y - uy) ** 2
                         if d <= r2: best.append((d, t.id, t))
                 if not best: continue
                 best.sort(); best = best[:D.TARGETS]
@@ -987,9 +1231,13 @@ class Game:
                     pw = m0 * tf
                     if u.plan_t == tp: pw *= 1.0 + u.plan_b * 0.01
                     if adv and tp in provs[up].river and self.river(up, tp): pw *= D.RIVER_ATK      # an opposed river crossing
-                    h = t.st["hard"]
+                    h = t.st["hard"]; td = t.st["dom"]; tdf = t.st["dfn"]
                     if h: pw *= 1.0 + h * ap1                          # armour shrugs off soft weapons; anti-tank weapons tear it open
-                    if not t.path:                                   # standing: cover from terrain, and from the fort at home
+                    if ux or td or tp >= S0:
+                        if td == 0 and tp >= S0: td = 1; tdf = D.AT_SEA_DFN
+                        pw *= st["va"] if td == 2 else st["vs"] if td == 1 else st["vg"]
+                        if td == 0 and ux and (u.owner, t.owner) not in self._warm: self._warm.add((u.owner, t.owner)); self.set_war(u.owner, t.owner)
+                    if not t.path and not td and tp < S0:                                   # standing: cover from terrain, and from the fort at home
                         cov = provs[tp].dfn
                         if owner[tp] == t.owner: cov *= self._fort_div(tp, u.st["pierce"])
                         if cov > 1.0:
@@ -999,12 +1247,12 @@ class Game:
                     if t.fighting == 0:
                         t.fighting = 2 if not t.path else 1
                         if not t.contact: t.contact = True; hot_units.append(t); act.add(t.id)
-                    hit = pw * D.DMG_K * 14.0 / max(4.0, t.st["dfn"]) / (D.XP_DFN0 + D.XP_DFN * t.xp / 100.0)     # veterans use the ground better
+                    hit = pw * D.DMG_K * 14.0 / max(1.5, tdf) / (D.XP_DFN0 + D.XP_DFN * t.xp / 100.0)     # veterans use the ground better
                     dmg[tid] = dmg.get(tid, 0.0) + hit; kby[tid] = u
                     t.sup = min(100.0, t.sup + hit * D.SUP_K * heavy)
                     if u.prov != t.prov: con.add((min(u.prov, t.prov), max(u.prov, t.prov)))
                     q = t.prov
-                    if adv and owner[q] == t.owner:                  # an assault on province q
+                    if adv and owner[q] == t.owner and not ux:       # an assault on province q
                         f = fights.get((q, u.owner))
                         if f is None: f = fights[(q, u.owner)] = ({}, {}, [0.0])
                         f[0][u.id] = u; f[1][tid] = t; f[2][0] += pw
@@ -1039,6 +1287,7 @@ class Game:
                     def_types=dc, def_supplied=int(all(o.supplied for o in dfd)), power=round(pw[0], 1), resist=0.0,
                     sea=int(any(d in t.sea for d in dirs)), a0=0.0, d0=0.0, ids={}, dids={},
                     aimed=sum(1 for u in att if prov in u.path and u.type != "rec"), entered=int(any(u.prov == prov for u in att)))      # attackers actually ordered into the province (0 = fire in passing)
+                if ep["aimed"]: self.set_war(side, dfd[0].owner)
             ep["last"] = self.tick
             for u in att:                                            # units join an assault as they come into range
                 if u.id not in ep["ids"]: ep["ids"][u.id] = (max(0.0, u.str), u.type, u.rdy, u.plan_b if u.plan_t == prov else 0.0, u.xp, u.mor)
@@ -1085,6 +1334,12 @@ class Game:
     def _retreat(self, u):
         """A broken unit (too weak, or its morale gone) falls back to a friendly province (its own, if it was
         attacking). It does not fight on the way. With nowhere to go it stands; cut off and out of heart it surrenders."""
+        if u.st["dom"] == 2:
+            if u.prov != u.base:
+                r = self._path_x(u.prov, u.base, u)
+                if r: u.path = r; u.plan_t = -1; u.settled = False; self.active.add(u.id)
+            return
+        if u.st["dom"] == 1 or u.prov >= self.sea0: return
         if self.owner[u.prov] == u.owner and not self.enemy_at(u.prov, u.owner) and not u.fighting: opts = [u.prov]     # not under fire: pull back to the key point
         else: opts = [b for b in self.provs[u.prov].nbrs if self.owner[b] == u.owner and not self.enemy_at(b, u.owner)]
         if not opts:
@@ -1118,14 +1373,14 @@ class Game:
         """Units walk in straight lines from key point to key point (their place in the formation around it).
         An advancing unit that has a target stays where it is and fights; a routed unit keeps going. A sea link is
         crossed the same way: the unit counts as in the province it left until it lands."""
-        provs = self.provs; cell = self.map.cell; gw = self.map.gw; gh = self.map.gh; units = self.units
+        provs = self.provs; cell = self.map.cell; gw = self.map.gw; gh = self.map.gh; units = self.units; S0 = self.sea0; scell = self.seacell
         for i in sorted(self.active):
             u = units.get(i)
             if u is None or (u.settled and not u.path): continue
             if u.path:
-                if u.fighting == 1 and not u.rout: continue
+                if u.fighting == 1 and not u.rout and not u.st["dom"] and u.prov < S0: continue      # (ships, aircraft and troopships keep going and fire as they pass)
                 nxt = u.path[0]
-                if nxt != u.prov and nxt not in provs[u.prov].nbrs: u.path = []; continue
+                if nxt != u.prov and nxt not in self.nb2[u.prov]: u.path = []; continue
                 goal = provs[nxt]
             else:
                 goal = provs[u.prov]; nxt = u.prov
@@ -1139,10 +1394,11 @@ class Game:
             here = u.prov
             if u.path and nxt != here:
                 cx = int(u.x); cy = int(u.y)
-                if 0 <= cx < gw and 0 <= cy < gh and cell[cy * gw + cx] == nxt:       # crossed the border
+                if 0 <= cx < gw and 0 <= cy < gh and (cell[cy * gw + cx] == nxt or (nxt >= S0 and scell[cy * gw + cx] == nxt)):       # crossed the border
                     self._enter(u, nxt); here = nxt
             step = D.SPAN / self.move_cost(u, here)
-            if nxt != here and nxt in provs[here].river and self.river(here, nxt) and not self.bridged(u.owner, here, nxt): step *= D.RIVER_MOVE
+            if u.st["dom"] == 0 and (here >= S0) != (nxt >= S0): step *= 0.5          # loading and landing
+            elif nxt != here and nxt in provs[here].river and not u.st["dom"] and self.river(here, nxt) and not self.bridged(u.owner, here, nxt): step *= D.RIVER_MOVE
             if step >= d:
                 u.x = tx; u.y = ty
                 if u.prov != nxt: self._enter(u, nxt)
@@ -1164,14 +1420,16 @@ class Game:
         cand = set(); units = self.units; owner = self.owner
         for i in self.active:
             u = units.get(i)
-            if u is not None and owner[u.prov] != u.owner: cand.add(u.prov)
+            if u is not None and owner[u.prov] != u.owner and u.prov < self.sea0 and not u.st["dom"]: cand.add(u.prov)
         for q in sorted(cand):
-            sides = set(u.owner for u in self.pos[q] if not u.rout and u.type != "rec" and (u.owner, owner[q]) not in self.peace)      # scouts neither take nor hold land; nor do pact partners passing through
+            sides = set(u.owner for u in self.pos[q] if not u.rout and u.type != "rec" and not u.st["dom"] and (u.owner, owner[q]) not in self.peace)      # scouts neither take nor hold land; nor do pact partners passing through
             if len(sides) != 1: continue
             side = next(iter(sides)); pr = self.provs[q]; r2 = D.CAP_R ** 2
             if side == self.owner[q]: continue
-            if not any(u.owner == side and u.type != "rec" and (u.x - pr.cx) ** 2 + (u.y - pr.cy) ** 2 <= r2 for u in self.pos[q]): continue
+            if not any(u.owner == side and u.type != "rec" and not u.st["dom"] and (u.x - pr.cx) ** 2 + (u.y - pr.cy) ** 2 <= r2 for u in self.pos[q]): continue
             old = self.owner[q]; self._set_owner(q, side)
+            for u in list(self.pos[q]):                          # aircraft caught on the ground are lost
+                if u.st["dom"] == 2 and u.owner != side and u.base == q and not u.path and (u.owner, side) not in self.peace: self._die(u, side)
             self.fort[q] = float(self.fort_level(q) // 2)        # captured works are half wrecked
             self.stock[q] *= 0.25                                # most of the depot is burnt or carried off
             if self.dev[q] > 0 or self.infra[q] > 0:             # a city taken by force is a damaged city
@@ -1199,6 +1457,7 @@ class Game:
             if not self.sdirty[p.id]: continue
             self.sdirty[p.id] = False
             s = set()
+            S0 = self.sea0; rngz = self.searange[p.id]
             hp = {}; hub = {}; q = []; dist = {}; infra = self.infra; owner = self.owner; acc = set(b for a, b in self.access if a == p.id); IH = D.INFRA_HOP
             for d in sorted(p.depots):                           # supply spreads from every working depot at once: each province draws on the nearest
                 if owner[d] == p.id and d not in p.depot_build: dist[d] = 0.0; hub[d] = d; heapq.heappush(q, (0.0, d, d))
@@ -1208,9 +1467,22 @@ class Game:
                 if a in done: continue
                 done.add(a); hub[a] = h
                 if owner[a] == p.id: s.add(a); hp[a] = da
-                for b in self.provs[a].nbrs:
+                wa = a >= S0
+                for b in (self.nb2[a] if (wa or (rngz and self.provs[a].coast)) else self.provs[a].nbrs):
                     ob = owner[b]
+                    if b >= S0:                                      # by ship: through the sea zones your shipping can use
+                        if b not in rngz or b in done: continue
+                        nd = da + D.SEA_SUPPLY_HOP
+                        if nd < dist.get(b, 1e18): dist[b] = nd; heapq.heappush(q, (nd, b, h))
+                        continue
+                    if wa:
+                        if ob != p.id or b in self.cold: continue
+                        if b not in done:
+                            nd = da + 1.0
+                            if nd < dist.get(b, 1e18): dist[b] = nd; heapq.heappush(q, (nd, b, h))
+                        continue
                     if ob != p.id and not (ob in acc and infra[b] >= 1.0): continue
+                    if b in self.provs[a].lane and not p.ocean: continue
                     if b in done:
                         if hub[b] != h and ob == p.id and owner[a] == p.id: link.setdefault(h, set()).add(hub[b])
                         continue
@@ -1237,7 +1509,7 @@ class Game:
             a = q[i]; i += 1
             if seen[a] >= rng: continue
             if a != prov and self.provs[a].elev > e0: continue      # visible, but blocks what lies behind
-            for b in self.provs[a].nbrs:
+            for b in self.nb2[a]:
                 if b not in seen: seen[b] = seen[a] + 1; q.append(b)
         r = self._sight[key] = frozenset(seen)
         return r
@@ -1251,9 +1523,10 @@ class Game:
             ov = self.ownvis[p.id]
             if ov is None:
                 ov = self.ownvis[p.id] = set()
-                for i in self.owned[p.id]: ov.add(i); ov.update(provs[i].nbrs)
+                for i in self.owned[p.id]: ov.add(i); ov.update(self.nb2[i])
             vis = set(ov)
             for k in self.occ[p.id]: vis.update(self.sight_from(*k))
+            if p.sat: vis = set(range(1, self.n))
             for a, b in self.allies:                          # allies show each other what they see
                 if a == p.id: vis |= self.players[b].visible
             p.visible = vis; p.explored |= vis
@@ -1359,7 +1632,7 @@ class Game:
             if weight <= 0: return "P%d is not a depot" % prov
             if prov not in p.supplied: return "P%d is cut off from your depots" % prov
             if p.res < D.DEPOT_COST: return "need %d res (have %d)" % (D.DEPOT_COST, p.res)
-            p.res -= D.DEPOT_COST; p.depots[prov] = 0.0; p.depot_build[prov] = D.DEPOT_HOURS; p.depot_want[prov] = weight; return None
+            p.res -= D.DEPOT_COST; p.spent["depots"] += D.DEPOT_COST; p.depots[prov] = 0.0; p.depot_build[prov] = D.DEPOT_HOURS; p.depot_want[prov] = weight; return None
         if weight <= 0 and sum(1 for k, v in p.depot_want.items() if v > 0 and k != prov) == 0: return "you need at least one depot"
         p.depot_want[prov] = weight; return None
 

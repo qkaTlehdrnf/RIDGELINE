@@ -24,10 +24,11 @@ def tick(api):
     if high >= 6: mix += ["mtn", "mtn", "mtn"]
     k = mem.get("k", 0); res = api.res; mp = api.mp
     cities = [i for i, pr in P.items() if pr["owner"] == "me" and pr["city"] and pr["supplied"]]
+    mix = [c for c in mix if c in api.costs] or ["inf"]      # only what has been discovered
     while cities and api.income > -5:
         code = mix[k % len(mix)]
         if mp < api.costs[code][1] + 30:
-            code = "arm" if res >= api.costs["arm"][0] + 10 and mp >= api.costs["arm"][1] + 30 else None
+            code = "arm" if "arm" in api.costs and res >= api.costs["arm"][0] + 10 and mp >= api.costs["arm"][1] + 30 else None
         if code is None or res < api.costs[code][0] + 10: break
         if not api.cmd("recruit %s P%d" % (code, cities[k % len(cities)])).startswith("ok"): k += 1; break        # cannot afford this kind (maybe no steel or oil): try the next kind next time
         res -= api.costs[code][0]; mp -= api.costs[code][1]; k += 1

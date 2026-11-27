@@ -17,6 +17,7 @@ import os
 import random
 import time
 
+from . import data as D
 from .engine import Game, Player, Unit
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -36,6 +37,8 @@ def belief_game(sess):
     g = Game.__new__(Game)
     g.map = g0.map; g.seed = g0.seed; g.rng = random.Random(g0.tick * 7919 + pid)
     g.provs = g0.provs; g.n = g0.n; g.stock_hop = g0.stock_hop
+    g.sea0 = g0.sea0; g.seacell = g0.seacell; g.nb2 = g0.nb2; g.ages = g0.ages; g.strikes = []; g._seadirty = True
+    g.hostile = {k: v for k, v in g0.hostile.items() if pid in k}
     g.tick = g0.tick; g.max_ticks = 10 ** 9; g.over = False; g.winner = None
     ko = p0.known_owner
     g.owner = [ko.get(i, -1) for i in range(g.n)]
@@ -71,8 +74,15 @@ def belief_game(sess):
             kd = [d for d, o in p0.known_depots.items() if o == q0.id and g.owner[d] == q0.id]
             if kd: q.depots = {d: 1.0 / len(kd) for d in kd}; q.depot_want = dict(q.depots); q._cap = q.capital if q.capital in kd else kd[0]      # depots it has seen stand in for the ones it has not
             q.res = p0.res; q.mp = p0.mp; q.bank = dict(p0.bank)
+        # what has been discovered: its own exactly; of the others the forecast assumes what the commander has itself
+        q.base = q0.base if q0.id == pid else p0.base; q.known = set(p0.known); q.gen = dict(p0.gen); q.lmul = {c: dict(v) for c, v in p0.lmul.items()} if q0.id == pid else {}
+        q.gmul = dict(p0.gmul) if q0.id == pid else dict(dig=1.0, cost=1.0); q.gadd = dict(p0.gadd) if q0.id == pid else dict(xp0=0)
+        for k in ("fort_cap", "sail", "sea_reach", "ocean", "sat", "missile", "aa"): setattr(q, k, getattr(p0, k))
+        q._q = {}                                              # how good a model not yet built will be is unknown here too
+        if q0.id != pid: q.marks = {c: [dict(v[-1])] for c, v in p0.marks.items()}; q.stats = {c: v[-1] for c, v in q.marks.items()}
         g.hide_tech(q, g0.tick * 7919 + pid * 31 + q0.id)      # the forecast does not know what research would find: it rolls its own dice
         g.players.append(q)
+    g.blockade = [set() for _ in g.players]; g.searange = [{} for _ in g.players]
     g.pacts = {k: dict(v) for k, v in g0.pacts.items() if pid in k}; g._peace()      # only the commander's own pacts are known to it
     twin = {}; g._index(); g._own_dirty = True
     g._wealth()
@@ -80,7 +90,7 @@ def belief_game(sess):
     for u0 in g0.punits[pid].values():
         u = Unit(u0.id, pid, u0.type, me.marks[u0.type][u0.st["mark"] - 1], u0.prov)        # the copy's own stats table: research in the forecast must not touch the real one
         for k in ("path", "prog", "str", "group", "fighting", "supplied", "born", "contact", "dig", "rdy", "plan_t", "plan_b", "dry", "x", "y", "ox", "oy", "last", "rout",
-                  "xp", "mor", "sup", "settled", "hours"):
+                  "xp", "mor", "sup", "settled", "hours", "base"):
             setattr(u, k, getattr(u0, k))
         u.path = list(u0.path); g.pos[u.prov].append(u); g._add(u); twin[u0.id] = u; me.upkeep += u.st["upkeep"]; me.n_units += 1
         if u0.id in g0.active: g.active.add(u.id)
@@ -91,6 +101,11 @@ def belief_game(sess):
         if not g.players[owner].alive: continue
         lvl, types, strength, n = e
         kinds = [t for t, c in sorted(types.items()) for _ in range(c)] if types else ["inf"] * n
+        kinds = [t if t in g.players[owner].stats else "inf" for t in kinds]
+        if i >= g.sea0:
+            for t in kinds:
+                if D.UNITS[t]["dom"]: u = g.spawn(owner, t, i); u.str = max(1.0, min(100.0, strength / float(len(kinds))))
+            continue
         for t in kinds:
             u = g.spawn(owner, t, i); u.str = max(1.0, min(100.0, strength / float(len(kinds))))
         g.owner[i] = owner; g._own_dirty = True
@@ -98,7 +113,7 @@ def belief_game(sess):
         if not q.alive and q.id != pid:
             for i in range(g.n):
                 if g.owner[i] == q.id: g.owner[i] = -1
-    g._supply(); g._vision()
+    g._sea_update(); g._supply(); g._vision()
     return g, twin
 
 

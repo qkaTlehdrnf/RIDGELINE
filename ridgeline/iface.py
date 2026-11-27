@@ -17,6 +17,7 @@ import re
 import time
 
 from . import data as D
+from . import ages as A
 from .mapgen import ascii_map
 
 CODES = tuple(D.UNITS)
@@ -88,6 +89,7 @@ class Session:
                      "A river is no obstacle while both banks are frozen (winter in the cold latitudes), and your own units cross at normal speed where both banks are yours and both have infrastructure %d or more (bridges)."
                      % (D.RIVER_MOVE, D.RIVER_ATK, D.RIVER_BRIDGE))
         L.append("TIME 1 tick = 1 hour, 24 = 1 day. The game runs in real time and does not wait for you.")
+        if g.ages: L += self._brief_ages()
         L.append("MAP is a graph of provinces. Owning a province that connects to one of your depots through your own provinces "
                  "(a supply line) pays its yield every day. Cut-off provinces pay nothing.")
         L.append("ECONOMY: every province has a development level (0-%g; cities start at %g, capitals at %g) and an infrastructure level (roads and rail, 0-%g). "
@@ -218,6 +220,7 @@ class Session:
                  % (D.MAIL_LEN, D.MAIL_PER_DAY, D.TRUCE_HOURS, D.PACT_RENEW, D.OFFER_HOURS, D.PACT_NOTICE))
         L.append("UNITS code atk/dfn speed sight range cost-res/manpower/hours [+steel/oil/rare] upkeep-per-day [hard] ap  notes")
         for c in CODES:
+            if c not in p.stats: L.append(" %s  NOT DISCOVERED YET (discovery: %s)  %s" % (c, A.OPENED_BY.get(c), D.NOTES[c])); continue
             s = p.stats[c]
             L.append(" %s %g/%g v%g s%d r%g %d/%d/%d%s u%g%s ap%g  %s" % (
                 c, s["atk"], s["dfn"], s["spd"], s["sight"], s["range"], s["cost"], s["mp"], s["time"],
@@ -261,6 +264,9 @@ class Session:
         L.append(" develop P<id> | build P<id>     raise a province's development / its infrastructure by one level (see ECONOMY); 'q economy'")
         L.append(" offer <faction> access | revoke <faction>     open your roads to each other / close them again (see ECONOMY)")
         L.append(" research <line>         start the next level of an upgrade line (see UPGRADES); 'q tech' lists every line with what you know about it")
+        L.append(" research <discovery>    start a discovery of the tree (see AGES); 'q tree' lists the tree with what is open to you and what it costs you now")
+        L.append(" declare <faction>       be at war with that faction for the next %d days (see WAR)      strike P<id>   fire a missile at a province you can see (needs ballistic_missiles)" % (D.WAR_HOURS // 24))
+        L.append(" q budget                where your res comes from and goes (see CAPITAL)      q sea [P<id>]   the sea zones you know (around a province), which your shipping can use, which are closed to you")
         L.append(" say <faction> <text> | give <faction> <n> <what> | offer <faction> pact|alliance [hours] | offer <faction> trade <n> <what>|P<id> .. for ..")
         L.append(" offer <faction> supply <n> <what> .. for <n> <what> .. [hours] | cancel <delivery id>      'q powers': what you know of every faction you met; 'q env': season and climate")
         L.append(" accept <offer id> | reject <offer id> | break <faction>        see DIPLOMACY; 'q dip' shows your dealings")
@@ -274,8 +280,98 @@ class Session:
         L.append("   q army: the condition of your own army and its supply, as much or as little as you ask for. 0 = totals (mean readiness, share ready (>= 60), spent (< 20),")
         L.append("   dry, moving, in contact, fighting, unsupplied). 1 = also by unit type, by standing order (front/expand/explore/direct), and the front as a whole")
         L.append("   (units per border province, stock, inflow against burn per hour, provinces running short). 2 = also one row for every province holding your units.")
+        L.append("   (<sel> 'land' = all your ground units, 'sea' = all your ships, 'air' = all your aircraft; ships and aircraft take move / hold / prepare (ships) / refit / group, not the standing orders front / expand / explore)")
         L.append(" <sel> = unit ids '3,5-8' | group name | unit type | all | @P<id> (your units in that province); join with ','; 'old' = all your units on an outdated model, 'old:<type>' = those of one type")
         return "\n".join(L)
+
+    def _brief_ages(self):
+        g, p = self.g, self.p; L = []
+        L.append("THE CALENDAR IS COMPRESSED: this one war stands for the years 0 to %d (%d game hours; a game day is about %.1f years). The year shows in every observation." % (A.CAL_YEARS, A.CAL_HOURS, A.CAL_YEARS / (A.CAL_HOURS / 24.0)))
+        L.append("AGES: everyone starts in the ancient world. You can raise only %s. Every other kind of unit, bigger forts, ships, aircraft, missiles and satellites must be DISCOVERED, "
+                 "in the order the tree below allows: `research <discovery>` (uses one of your %d research slots; res cost and hours by age: %s; from the %s age on also strategic resources: %s). "
+                 "A discovery that a faction you have met already has is %d%% cheaper for you for each such faction (up to %d%%); 'q tree' and api.tree show your price now. "
+                 "A discovery OPENS a kind of unit, or gives a kind a NEW MODEL, or changes what you can do. A model's attack and defence are the unit table's values (which describe the newest "
+                 "model of all) times the nominal power of its age (%s; a second model inside one age x1.12), its range times %s (never under 1.5), and it needs steel only from the medieval age, oil only from the great-war age. "
+                 "WHAT NOBODY KNOWS BEFOREHAND: your own version of a model is its nominal power times a hidden factor between %.2f and %.2f, drawn separately for you, for every kind and model, in this war. "
+                 "So a new model is usually better than what you have, sometimes far better, sometimes hardly at all; you learn its real values only when the discovery is made (they are in the result and in api.stats). "
+                 "As with all new models, units in the field keep the old one until you pay for `refit`. The UPGRADE lines of a kind (see UPGRADES) exist only for kinds you can raise, and what they gave carries over to later models."
+                 % (", ".join("%s (%s)" % (c, n) for c, n in A.START.items()), D.TECH_SLOTS,
+                    "; ".join("%s %d res %d h" % (A.ERAS[e], A.COST[e], A.HOURS[e]) for e in range(len(A.ERAS))), A.ERAS[1],
+                    "; ".join("%s %s" % (A.ERAS[e], "+".join("%d %s" % (v, k) for k, v in A.NEEDS[e])) for e in range(1, len(A.ERAS))),
+                    round(A.DIFFUSE * 100), round(A.DIFFUSE_MAX * 100), " ".join("%s %.2f" % (A.ERAS[e], A.POW[e]) for e in range(len(A.ERAS))),
+                    "/".join("%g" % x for x in A.RNG), A.QUALITY[0], A.QUALITY[1]))
+        L.append("THE TREE  discovery [age] <- what it needs first : what it brings")
+        for t, (e, req, un, fx, word) in A.TREE.items():
+            L.append(" %s [%s]%s : %s%s" % (t, A.ERAS[e], " <- " + ", ".join(req) if req else "", "; ".join("%s %s '%s'" % ("opens" if A.OPENED_BY[c] == t else "new model of", c, n) for c, n in un) or word,
+                                         (" (+ " + word + ")") if un and fx else ""))
+        L.append("FORTS AND THE TREE: without masonry your forts stop at level 1, with it at 2, with castles at 3.")
+        L.append("THE SEA is divided into SEA ZONES (province ids from %d up; api.sea, 'q sea'). A coastal province lists the zones it touches (api.provs[id]['coast']). "
+                 "SHIPS (shp, later sub and cvn) are built in a coastal city, appear in the zone off it, and move only from zone to zone (`move <ships> P<zone>`); they need the discovery galleys or later. "
+                 "TROOPS GO BY SEA on their own once you have galleys: `move` to a land province routes them over water when that is the faster or the only way (loading and landing cost about %d h each; "
+                 "at sea they move at your transport speed, cannot fire, and are sunk easily: defence %g). Deep water (zones touching no land) and the long sea lanes need the discovery navigation. "
+                 "Your shipping reaches only so many zones from a coast you own (galleys %d, sailing %d, ships_of_the_line %d, ironclads %d, dreadnoughts %d): troops and ships beyond that reach, "
+                 "or inside a zone closed to you, are out of supply and waste away. SUPPLY ALSO GOES BY SEA: your coastal provinces supply each other through the zones your shipping can use "
+                 "(a zone counts %g supply steps), so a landing can be fed from home, and can be starved by closing the sea behind it. "
+                 "A ZONE IS CLOSED TO YOU while a warship of a faction at war with you lies in it and none of yours does. Ships regain strength and readiness only in a zone that touches your own supplied coast. "
+                 "Ships fire at ships and at troops at sea; they fire at ground units (x their vg value) only in a province your side is assaulting, or one they `prepare` against (a zone next to it). "
+                 "Ground units answer ships with x their vs value (artillery 0.6, others 0.2). Unit table columns for these: dom (0 land, 1 sea, 2 air), vg/vs/va = fire multiplier against ground units / ships / aircraft."
+                 % (g.sea0, D.EMBARK, D.AT_SEA_DFN, A.SAIL["sail1"][1], A.SAIL["sail2"][1], A.SAIL["sail3"][1], A.SAIL["sail4"][1], A.SAIL["sail5"][1], D.SEA_SUPPLY_HOP))
+        L.append("THE AIR (discoveries flight, bombers, jet_engines): an aircraft has a BASE, the province it was raised in. `move <aircraft> P<id>` to a province that is not yours is a SORTIE: it flies there over anything, "
+                 "fights within its range while it stays, and turns for home by itself when its readiness falls under %d (it burns %g readiness an hour away from base and regains %g an hour on the ground; "
+                 "with readiness 0 in the air it goes down). `move` to a supplied province of your own makes that its new base. Fighters (ftr) shoot at aircraft; bombers (bmr) hit ground units and ships in the "
+                 "province they were sent against, and troops at sea. Aircraft on the ground cannot be shot at, but are lost if their base province is taken. Aircraft never take or hold land. "
+                 "Ground units can hit aircraft only after assault_rifles (va 0.15); ships from the great-war age (va 0.3); carriers (cvn) reach 10 cells against everything."
+                 % (D.AIR_HOME, D.AIR_BURN, D.AIR_REST))
+        L.append("SPACE: satellites let you see every province in the world (strengths stay estimates where you have no unit near). ballistic_missiles gives `strike P<id>` on any province in your sight: %s, lands after %d h, "
+                 "every unit in the province that is not yours or a pact partner's loses about %g strength (halved per fort level x0.5) and is pinned, the stock there halves, roads and development are damaged."
+                 % (", ".join("%d %s" % (v, k) for k, v in D.STRIKE.items()), D.STRIKE_HOURS, D.STRIKE_DMG))
+        L.append("WAR: at sea and in the air units fire only at factions you are AT WAR with. You are at war with a faction for %d days after the last real assault on land between you (either way), "
+                 "a missile strike, an air or naval attack on ground units, or `declare <faction>`; the other side is told. A pact ends it. On land nothing changes: see FRONTS. api.wars lists whom you are at war with."
+                 % (D.WAR_HOURS // 24))
+        L.append("CAPITAL: your res is finite and everything draws on the same purse: raising units, their upkeep every day, discoveries and upgrades, refits, development and roads and their upkeep, depots, missiles. "
+                 "`q budget` / api.budget show: res in hand, income per day, upkeep per day (units, cities and roads), net per day, how many days the purse lasts at the present rate if net is negative, "
+                 "what you have taken in and paid out so far by purpose, upkeep by unit kind, the res tied up in recruitment and research under way, and for every discovery open to you how many days of net income it costs. "
+                 "Nothing in the rules tells you how to divide it.")
+        return L
+
+    def tree_view(self):
+        """The tree as this faction knows it: status, its price now, what it needs and brings. No hidden data."""
+        g, p = self.g, self.p; out = {}
+        for t, (e, req, un, fx, word) in A.TREE.items():
+            st = A.status(g, p.id, t)
+            out[t] = dict(status=st, age=A.ERAS[e], needs=list(req), missing=[r for r in req if r not in p.known], opens=[c for c, n in un if A.OPENED_BY[c] == t],
+                          new_models=[c for c, n in un if A.OPENED_BY[c] != t], effect=word, cost=A.cost(g, p.id, t) if st != "known" else None, hours=A.HOURS[e],
+                          known_to_met=sum(1 for o in p.met if t in g.players[o].known))
+        return out
+
+    def budget_view(self):
+        g, p = self.g, self.p; net = p.income - p.upkeep - p.maint; kinds = {}
+        for u in g.punits[p.id].values(): kinds[u.type] = kinds.get(u.type, 0.0) + u.st["upkeep"]
+        tied = sum(p.stats[q[0]]["cost"] for q in p.queue if q[0] in p.stats)
+        tree = {}
+        for t in A.TREE:
+            if g.ages and A.status(g, p.id, t) == "open":
+                c = A.cost(g, p.id, t); lack = {k: v for k, v in c.items() if (p.res if k == "res" else p.bank[k]) < v}
+                tree[t] = dict(cost=c, can_pay_now=not lack, lacking=sorted(lack), days_of_net_income=round(c["res"] / net, 1) if net > 0 else None)
+        return dict(res=round(p.res, 1), income=round(p.income, 1), upkeep_units=round(p.upkeep, 1), upkeep_works=round(p.maint, 1), net=round(net, 1),
+                    days_left=round(p.res / -net, 1) if net < 0 else None, upkeep_share=round((p.upkeep + p.maint) / p.income, 3) if p.income > 0 else None,
+                    earned=round(p.earned), spent={k: round(v) for k, v in p.spent.items()}, upkeep_by_kind={k: round(v, 1) for k, v in sorted(kinds.items())},
+                    units=len(g.punits[p.id]), in_training=len(p.queue), res_in_training=tied, research=[r[0] for r in p.research],
+                    stock=dict(p.bank), income_by=dict(p.inc), fuel_per_day=round(p.fuel, 2), open_discoveries=tree)
+
+    def sea_view(self, around=None, steps=3):
+        g, p = self.g, self.p; rz = g.searange[p.id]; blk = g.blockade[p.id]; out = {}
+        zs = [i for i in p.explored if i >= g.sea0]
+        if around is not None:
+            near = set(g.provs[around].coast) if around < g.sea0 else {around}; fr = list(near)
+            for _ in range(steps):
+                fr = [b for a in fr for b in g.provs[a].nbrs if b not in near]; near.update(fr)
+            zs = [i for i in zs if i in near]
+        for i in sorted(zs):
+            pr = g.provs[i]
+            out[i] = dict(nbrs=list(pr.nbrs), coast=list(pr.coast), deep=pr.deep, x=pr.cx, y0=pr.cy, visible=i in p.visible, reach=rz.get(i), closed=i in blk,
+                          mine=sum(1 for u in g.pos[i] if u.owner == p.id))
+        return out
 
     def known_path(self, a, b):
         """Route using only land this player has explored (the destination may be the first unexplored step)."""
@@ -298,6 +394,7 @@ class Session:
         """Every upgrade line as this faction knows it: levels done, status, cost and time of the next level. No hidden data."""
         g = self.g; out = {}
         for line in g.tech_lines():
+            if "." in line and line.split(".")[0] not in self.p.stats: continue
             lv, st = g.tech_status(self.pid, line)
             out[line] = dict(level=lv, status=st, cost=g.tech_cost(line, lv + 1) if st == "open" else None, hours=D.TECH_HOURS * (lv + 1) if st == "open" else 0)
         return out
@@ -320,7 +417,7 @@ class Session:
         g, p, pid = self.g, self.p, self.pid; L = {}
         mine = [u for u in g.punits[pid].values()]
         own = [i for i in range(g.n) if g.owner[i] == pid]
-        L["H"] = "t%d res%d%+d mp%d%+d steel%d%+d oil%d%+d rare%d%+d coal%d%+d rubber%d%+d own%d units%d %s%s" % (
+        L["H"] = ("y%d %s " % (A.year(g.tick), A.ERAS[A.era_of(p)]) if g.ages else "") + "t%d res%d%+d mp%d%+d steel%d%+d oil%d%+d rare%d%+d coal%d%+d rubber%d%+d own%d units%d %s%s" % (
             g.tick, p.res, round(p.income - p.upkeep), p.mp, round(p.mp_income), p.bank["steel"], round(p.inc["steel"]), p.bank["oil"], round(p.inc["oil"] - p.fuel),
             p.bank["rare"], round(p.inc["rare"]), p.bank["coal"], round(p.inc["coal"]), p.bank["rubber"], round(p.inc["rubber"]), len(own), len(mine),
             D.SEASONS[g.season_at(g.tick, g.provs[p.capital].lat)], " NO-FUEL" if p.nofuel else "")
@@ -556,7 +653,7 @@ class Session:
             return self._near_cap()
         if not t.isdigit() or int(t) >= self.g.n: raise CmdError("bad province '%s'" % tok)
         i = int(t); ex = self.p.explored
-        if i not in ex and not any(b in ex for b in self.g.provs[i].nbrs): raise CmdError("P%d is unexplored" % i)
+        if i not in ex and not any(b in ex for b in self.g.nb2[i]): raise CmdError("P%d is unexplored" % i)
         return i
 
     def _sel(self, tok):
@@ -570,6 +667,7 @@ class Session:
                 a, b = part.split("-", 1); ids += list(range(int(a), int(b) + 1))
             elif part in CODES: ids += [u.id for u in mine if u.type == part]
             elif part == "all": ids += [u.id for u in mine]
+            elif part in ("land", "sea", "air"): ids += [u.id for u in mine if u.st["dom"] == ("land", "sea", "air").index(part)]
             elif part == "old": ids += [u.id for u in mine if u.st is not self.p.stats[u.type]]
             elif part[:4] == "old:" and part[4:] in CODES: ids += [u.id for u in mine if u.type == part[4:] and u.st is not self.p.stats[u.type]]
             elif part[0] == "@": pv = self._prov(part[1:]); ids += [u.id for u in mine if u.prov == pv]
@@ -602,6 +700,12 @@ class Session:
         g, pid = self.g, self.pid
         toks = line.split(); verb = toks.pop(0).lower()
         if verb == "q": return self.query(" ".join(toks))
+        if verb in ("expand", "explore", "front") and toks:
+            ids = [i for i in self._sel(toks[0]) if not g.units[i].st["dom"] and g.units[i].prov < g.sea0]
+            if not ids: raise CmdError("ships, aircraft and troops at sea take no standing orders")
+            toks[0] = ",".join(str(i) for i in ids)
+        if verb == "declare": return g.order_declare(pid, self._fac(toks.pop(0)))
+        if verb == "strike": return g.order_strike(pid, self._prov(toks.pop(0)))
         if verb in ("move", "attack", "atk"):
             ids = self._sel(toks.pop(0)); err = g.order_move(pid, ids, self._prov(toks.pop(0)), known=self.p.explored)
             self.front.difference_update(ids); self.expand.difference_update(ids); self.explore.difference_update(ids)
@@ -792,6 +896,20 @@ class Session:
                     if toks and not line.startswith(toks[0]): continue
                     rows.append("%s L%d %s%s" % (line, t["level"], t["status"], " next: " + _cost(t["cost"]) + " %dh" % t["hours"] if t["cost"] else ""))
                 return "\n".join(rows + ["results so far: " + ("; ".join(x["text"] for x in p.tech_log) or "none")])
+            if k == "budget":
+                import json as _j
+                return _j.dumps(self.budget_view(), ensure_ascii=False)
+            if k == "tree":
+                rows = ["year %d, your age: %s. discovery [age] status, your price now, hours; (n) = factions you have met that have it" % (A.year(g.tick), A.ERAS[A.era_of(p)])]
+                for t, v in self.tree_view().items():
+                    if toks and toks[0] not in (v["status"], v["age"]) and not t.startswith(toks[0]): continue
+                    rows.append("%s [%s] %s%s%s (%d)" % (t, v["age"], v["status"], " needs " + ",".join(v["missing"]) if v["missing"] else "", " %s %dh" % (_cost(v["cost"]), v["hours"]) if v["cost"] and v["status"] != "researching" else "", v["known_to_met"]))
+                return "\n".join(rows)
+            if k == "sea":
+                v = self.sea_view(self._prov(toks[0]) if toks else None)
+                return "\n".join(["SEA ZONES you know: id deep? reach(zones from your coast, - = out of reach) closed? : neighbouring zones | shore provinces"] +
+                                 ["%d%s reach %s%s%s : %s | %s" % (i, " deep" if z["deep"] else "", z["reach"] if z["reach"] else "-", " CLOSED" if z["closed"] else "", " yours %d" % z["mine"] if z["mine"] else "",
+                                                               ",".join(map(str, z["nbrs"])), ",".join(map(str, z["coast"][:12]))) for i, z in list(v.items())[:120]])
             if k == "enemy":
                 out = ["P%d%s" % (i, self._est_str(i)) for i in sorted(p.visible) if self._est_str(i)]
                 return "enemy seen: " + (" ".join(out) if out else "none")
@@ -1029,6 +1147,16 @@ class PolicyApi:
     api.unexplored        [explored provinces with a neighbour you have never seen]   the edge of your map knowledge
     api.enemy             {prov: dict(n, str, exact, types, who)}   enemy units you can currently see
     api.enemy_capital     nearest known enemy capital (province id or None)      api.enemy_capitals  {player id: province}
+    api.year, api.age     the calendar year (0-2000) and the age of your latest discovery      api.can_raise  [unit kinds you can raise now]; api.stats / api.costs / api.unit_costs hold only those
+    api.tree              {discovery: dict(status 'known'|'researching'|'open'|'locked', age, needs [..], missing [..], opens [kinds], new_models [kinds], effect, cost (dict, your price now), hours, known_to_met)}
+                          api.known = [discoveries you have]; start one with api.cmd("research <discovery>"). api.fort_cap = highest fort level you can build.
+    api.budget            dict(res, income, upkeep_units, upkeep_works, net (per day), days_left (None unless net < 0), upkeep_share (upkeep / income), earned, spent {units, research, works, refit, depots, missiles},
+                          upkeep_by_kind {kind: res per day}, units, in_training, res_in_training, research, stock, income_by, fuel_per_day,
+                          open_discoveries {discovery: dict(cost, can_pay_now, lacking [resources], days_of_net_income)})      see CAPITAL
+    api.sea               {sea zone id: dict(nbrs [zones], coast [land provinces on its shore], deep, x, y0, visible, reach (zones from your coast, None = beyond your shipping), closed (an enemy fleet shuts it to you), mine (your units there))}
+                          only zones you have seen. api.provs[id]['coast'] = the zones a land province touches. api.transport_speed (0 = your troops cannot go by sea), api.sea_reach, api.ocean
+    api.wars              [factions you are at war with now]      api.missiles, api.satellites (True/False), api.strike_cost
+                          api.units rows also have dom (0 land, 1 sea, 2 air), base (aircraft: its base province), at_sea (True for ships and for troops on transports)
     api.mem               dict kept between calls
     api.model             learned parameters loaded from a JSON file for this side ({} if none); see tools/fit_battle_model.py
     api.cmd(line)         run a command line, returns the result text
@@ -1052,6 +1180,9 @@ class PolicyApi:
         self.old_units = sum(1 for u in g.punits[p.id].values() if u.st is not p.stats[u.type])
         self.economy = sess.economy_view(); kd = p.known_dev
         self.depots = sess.depot_view(); self.depot_cost = D.DEPOT_COST; self.enemy_depots = {d: g.players[o].faction for d, o in p.known_depots.items()}
+        self.tree = sess.tree_view() if g.ages else {}; self.known = sorted(p.known); self.year = A.year(g.tick); self.age = A.ERAS[A.era_of(p)]; self.can_raise = sorted(p.stats)
+        self.budget = sess.budget_view(); self.sea = sess.sea_view(); self.wars = sorted(e.faction for e in g.players if e.id != pid and e.alive and g.war(pid, e.id))
+        self.fort_cap = p.fort_cap; self.transport_speed = p.sail; self.sea_reach = p.sea_reach; self.ocean = p.ocean; self.missiles = p.missile; self.satellites = p.sat; self.strike_cost = dict(D.STRIKE)
         self.tech = sess.tech_view(); self.tech_log = [dict(x) for x in p.tech_log]; self.research = [list(r) for r in p.research]
         self.enemy_capitals = dict(p.known_caps); self.enemy_capital = sess._near_cap()
         ko = p.known_owner; rel = p.explored
@@ -1060,12 +1191,12 @@ class PolicyApi:
                                   fort=p.known_fort.get(pr.id, 0), stock=g.stock[pr.id] if g.owner[pr.id] == pid else 0,
                                   flow=g.stock_flow(pid, pr.id),
                                   owner="me" if ko.get(pr.id, -1) == pid else "neutral" if ko.get(pr.id, -1) < 0 else "enemy",
-                                  who=ko.get(pr.id, -1), visible=pr.id in p.visible, harsh=bool(pr.biome), sea=pr.sea, river=sorted(pr.river), x=pr.cx, y0=pr.cy, steel=pr.steel, oil=pr.oil, rare=pr.rare, coal=pr.coal, rubber=pr.rubber, lat=pr.lat, cold=pr.id in g.cold, freezes=g.freezes(pr.id, 3), jungle=pr.id in g.jungle,
+                                  who=ko.get(pr.id, -1), visible=pr.id in p.visible, harsh=bool(pr.biome), sea=pr.sea, river=sorted(pr.river), coast=list(pr.coast), x=pr.cx, y0=pr.cy, steel=pr.steel, oil=pr.oil, rare=pr.rare, coal=pr.coal, rubber=pr.rubber, lat=pr.lat, cold=pr.id in g.cold, freezes=g.freezes(pr.id, 3), jungle=pr.id in g.jungle,
                                   dev=g.dev[pr.id] if g.owner[pr.id] == pid else kd.get(pr.id, (0.0, 0.0))[0], infra=g.infra[pr.id] if g.owner[pr.id] == pid else kd.get(pr.id, (0.0, 0.0))[1],
                                   agg=g.agg[pr.id] if g.owner[pr.id] == pid else None, yield_now=g.prod[pr.id] if g.owner[pr.id] == pid else None, room=g.room(pr.id) if g.owner[pr.id] == pid else None,
                                   supplied=pr.id in p.supplied) for pr in (g.provs[i] for i in sorted(rel)) if pr.terrain != "water"}
         self.units = [dict(id=u.id, type=u.type, prov=u.prov, str=u.str, path=list(u.path), fighting=bool(u.fighting),
-                           supplied=u.supplied, group=u.group, front=u.id in sess.front or u.id in sess.expand, expand=u.id in sess.expand, explore=u.id in sess.explore, rdy=u.rdy, plan=u.plan_t, xp=u.xp, mor=u.mor, sup=u.sup, state=g.state(u), mark=u.st["mark"], old=u.st is not p.stats[u.type],
+                           supplied=u.supplied, group=u.group, front=u.id in sess.front or u.id in sess.expand, expand=u.id in sess.expand, explore=u.id in sess.explore, rdy=u.rdy, plan=u.plan_t, dom=u.st["dom"], base=u.base, at_sea=u.prov >= g.sea0, xp=u.xp, mor=u.mor, sup=u.sup, state=g.state(u), mark=u.st["mark"], old=u.st is not p.stats[u.type],
                            bonus=u.plan_b, dry=u.dry)
                       for u in g.punits[pid].values()]
         self.formations = dict(p.fxp)

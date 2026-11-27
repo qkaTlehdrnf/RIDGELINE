@@ -226,7 +226,7 @@ def test_fog_is_per_faction_and_scouts_explore_but_cannot_capture():
     assert "ok" in a.act("recruit rec 2"); n0 = len(a.p.explored)
     for _ in range(40): [s.pre_tick() for s in ss]; g.step()
     recs = [u for u in g.units.values() if u.owner == 0 and u.type == "rec"]; assert len(recs) >= 2
-    assert recs[0].st["spd"] > max(v["spd"] for k, v in a.p.stats.items() if k != "rec")       # the fastest unit
+    assert recs[0].st["spd"] > max(v["spd"] for k, v in a.p.stats.items() if k != "rec" and not v["dom"])       # the fastest unit on the ground
     out = a.act("expand rec"); assert "explore" in out and recs[0].id in a.explore and recs[0].id not in a.expand
     own0 = g.owner.count(0); crossed = set()
     for _ in range(120):
@@ -328,7 +328,7 @@ def test_resources_new_units_and_blind_upgrades():
     from ridgeline import data as D
     from ridgeline.wargame import belief_game
     g = small_game(seed=4, max_ticks=10 ** 6); s = Session(g, 0); p = g.players[0]
-    assert len(D.UNITS) == 14 and sum(1 for pr in g.provs if pr.steel) > 5 and sum(1 for pr in g.provs if pr.oil) > 3
+    assert len(D.UNITS) == 19 and sum(1 for pr in g.provs if pr.steel) > 5 and sum(1 for pr in g.provs if pr.oil) > 3
     # several resources: deposits pay only while supplied, and units need them
     g.step(); own = [i for i in p.supplied]
     assert abs(p.inc["steel"] - sum(g.provs[i].steel for i in own)) < 1e-9
@@ -339,7 +339,7 @@ def test_resources_new_units_and_blind_upgrades():
     # armour: soft weapons do little to it, anti-tank guns a lot
     assert D.UNITS["atg"]["ap"] > 2 and D.UNITS["inf"]["ap"] < 1 and D.UNITS["hvt"]["hard"] == 1.0
     # upgrades: the faction sees lines, levels, costs; never the hidden depth or size
-    api = PolicyApi(s, {}); assert len(api.tech) == 14 * 3 + len(D.TECH_GENERAL)
+    api = PolicyApi(s, {}); assert len(api.tech) == 19 * 3 + len(D.TECH_GENERAL)
     seen = s.brief() + s.query("tech") + repr(api.tech) + repr(s.obs_json())
     assert "_depth" not in seen and "_size" not in seen and all(t["status"] == "open" and t["level"] == 0 for t in api.tech.values())
     assert all(set(t) == {"level", "status", "cost", "hours"} for t in api.tech.values())
@@ -503,7 +503,7 @@ def test_v8_resources_relations_and_climate():
     c1, c3 = g.tech_cost("arm.weapons", 1), g.tech_cost("arm.weapons", 3)
     assert set(c1) == {"res", "steel"} and set(c3) == {"res", "steel", "coal", "rare"}
     a, b = g.players[0], g.players[1]; a.bank = dict.fromkeys(D.STRAT, 0.0); a.res = 5000.0; a.bank["steel"] = 500.0
-    assert g.order_research(0, "arm.weapons") is None and "need" in g.order_research(0, "inf.mobility")
+    assert g.order_research(0, "inf.weapons") is None and "need" in g.order_research(0, "inf.mobility") and "cannot raise" in g.order_research(0, "arm.weapons")
     sa, sb = Session(g, 0), Session(g, 1); a.met.add(1); b.met.add(0)
     assert "coal" in sa.brief() and "SEASONS AND CLIMATE" in sa.brief() and "_depth" not in sa.brief()
     # a standing delivery runs every day until someone cuts it off, and the neighbours hear who did
@@ -527,6 +527,8 @@ def test_v8_resources_relations_and_climate():
     assert (0, 1) in g.allies and far in a.visible and PolicyApi(sa, {}).pacts[b.faction]["kind"] == "alliance"
     pw = PolicyApi(sa, {}).powers; assert pw[b.faction]["relation"] == "alliance" and pw[b.faction]["land"] > 0 and pw[a.faction]["me"]
     # engines burn oil; without it they fight at reduced power
+    from ridgeline import ages as A
+    st = A.model(a, "arm", 1); st["mark"] = 1; a.stats["arm"] = st; a.marks["arm"] = [st]; g.spawn(0, "arm", a.capital)      # (the year 0 has no engines: hand it a tank)
     a.bank["oil"] = 0.0; a.inc["oil"] = 0.0
     for i in list(g.owned[0]):
         g.provs[i].oil = 0
