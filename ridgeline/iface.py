@@ -1016,12 +1016,15 @@ class Session:
         self.explore = set(i for i in self.explore if i in g.units)
         if not self.explore: return
         taken = set(g.units[i].path[-1] for i in self.explore if g.units[i].path)
+        fail = self.__dict__.setdefault("_ex_fail", {}); foe = {}; nex = len(ex); tick = g.tick
         for i in sorted(self.explore):
             u = g.units[i]
             if u.rout: continue
             if u.path:
                 if u.path[-1] in ex or (u.path[0] in vis and g.enemy_at(u.path[0], pid)): g.order_hold(pid, [i])     # already seen from afar, or enemy ahead
                 else: continue
+            fk = fail.get(u.prov)
+            if fk is not None and fk[0] == nex and tick - fk[1] < 12: self.explore.discard(i); continue      # just searched from here: nothing in reach
             seen = {u.prov}; q = [u.prov]; k = 0; goal = -1
             while k < len(q) and k < 1500 and goal < 0:
                 a = q[k]; k += 1
@@ -1030,8 +1033,11 @@ class Session:
                     seen.add(b)
                     if b not in ex:
                         if b not in taken and b not in self.no_go: goal = b; break
-                    elif provs[b].terrain != "water" and not (b in vis and g.enemy_at(b, pid)): q.append(b)
-            if goal < 0: self.explore.discard(i); continue
+                    elif provs[b].terrain != "water":
+                        e = foe.get(b)
+                        if e is None: e = foe[b] = b in vis and g.enemy_at(b, pid)
+                        if not e: q.append(b)
+            if goal < 0: fail[u.prov] = (nex, tick); self.explore.discard(i); continue
             if g.order_move(pid, [i], goal, known=ex): self.no_go.add(goal)        # water or no way in
             else: taken.add(goal)
 

@@ -1189,8 +1189,21 @@ class Game:
                 elif ux == 2 and not u.path and u.prov == u.base and st["va"] < 0.5: continue      # aircraft on the ground (fighters still go up against raiders); r2 = r * r; R = 1 if r <= B else 2
                 fl = foes.get((u.owner, R))
                 if fl is None:
-                    fl = foes[(u.owner, R)] = [t for dx in range(-R, R + 1) for dy in range(-R, R + 1)
-                                              for t in grid.get((bx + dx, by + dy), ()) if t.owner != u.owner and (t.owner, u.owner) not in peace]
+                    fl = [t for dx in range(-R, R + 1) for dy in range(-R, R + 1)
+                          for t in grid.get((bx + dx, by + dy), ()) if t.owner != u.owner and (t.owner, u.owner) not in peace]
+                    al = []; qp = {}; ql = {}; qo = {}                # for a unit holding its line: foes it always answers; quiet ones by province, by planned target, by owner
+                    for t in fl:
+                        if t.st["dom"] or t.prov >= S0 or t.path or owner[t.prov] != t.owner: al.append(t)
+                        else:
+                            x = qp.get(t.prov)
+                            if x is None: qp[t.prov] = [t]
+                            else: x.append(t)
+                            x = qo.get(t.owner)
+                            if x is None: qo[t.owner] = [t]
+                            else: x.append(t)
+                            if t.plan_t is not None and t.plan_t >= 0: ql.setdefault(t.plan_t, []).append(t)
+                    fl = foes[(u.owner, R)] = (fl, al, qp, ql, qo, {})
+                fl, al, qp, ql, qo, qc = fl
                 if not fl: continue
                 uxx = u.x; uy = u.y; best = []
                 if u.path or owner[u.prov] != u.owner:               # on the move, or standing on someone else's land: fights whatever is in reach
@@ -1201,13 +1214,26 @@ class Game:
                             best.append((d, t.id, t))
                 else:                                                # holding its own line: a quiet front stays quiet. It fires at what advances
                     uo = u.owner; upv = u.prov                       # or intrudes, and joins a battle that is already on (either way round)
-                    for t in fl:
+                    for t in al:
                         if t.st["dom"] or t.prov >= S0:
                             if not xok(u, t): continue
-                        elif not t.path and owner[t.prov] == t.owner and (t.prov, uo) not in ass and (upv, t.owner) not in ass \
-                                and u.plan_t != t.prov and t.plan_t != upv: continue      # (a prepared attack opens with its guns: units planning an attack on a province shell it, and are shelled back, when in range)
                         d = (t.x - uxx) ** 2 + (t.y - uy) ** 2
                         if d <= r2: best.append((d, t.id, t))
+                    if qp:                                           # (a prepared attack opens with its guns: units planning an attack on a province shell it, and are shelled back, when in range)
+                        upl = u.plan_t; ck = (upv, upl); cand = qc.get(ck)
+                        if cand is None:
+                            got = {}
+                            for o2, lst in qo.items():
+                                if (upv, o2) in ass:
+                                    for t in lst: got[t.id] = t
+                            for t in ql.get(upv, ()): got[t.id] = t
+                            for pv, lst in qp.items():
+                                if pv == upl or (pv, uo) in ass:
+                                    for t in lst: got[t.id] = t
+                            cand = qc[ck] = list(got.values())
+                        for t in cand:
+                            d = (t.x - uxx) ** 2 + (t.y - uy) ** 2
+                            if d <= r2: best.append((d, t.id, t))
                 if not best: continue
                 best.sort(); best = best[:D.TARGETS]
                 adv = bool(u.path); u.fighting = 1 if adv else 2; u.hours += 1; act.add(u.id)
