@@ -8,6 +8,7 @@
 import json, os, sys, time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); sys.path.insert(0, ROOT); sys.path.insert(0, os.path.join(ROOT, "tools"))
 from ridgeline import data as D
+from ridgeline import ages as A
 from ridgeline.engine import Game
 from ridgeline.iface import Session
 from record_replay import Recorder as _Recorder
@@ -36,11 +37,18 @@ def main():
     rec = Recorder(g, out + ".rlr"); rec.frame(); t0 = time.time(); side = []; seen = 0
     def snap():
         nonlocal seen
-        new = g.battle_log[seen:]; seen = len(g.battle_log)
+        new = g.battle_log[seen:]; seen = len(g.battle_log); sea = {}; ships = [0] * n; air = [0] * n
+        for u in g.units.values():
+            dom = u.st["dom"]
+            if dom == 1: ships[u.owner] += 1
+            elif dom == 2: air[u.owner] += 1
+            if u.prov >= g.sea0: k = "%d:%d:%d" % (u.prov, u.owner, 1 if dom == 1 else 2 if dom == 2 else 0); sea[k] = sea.get(k, 0) + 1
         side.append(dict(t=g.tick, depots=[{str(d): round(v, 2) for d, v in p.depots.items()} if p.alive else {} for p in g.players],
                          building=[sorted(p.depot_build) for p in g.players], pacts=len(g.pacts),
                          dev=[round(sum(g.dev[i] for i in g.owned[p.id]), 1) for p in g.players], infra=[round(sum(g.infra[i] for i in g.owned[p.id]), 1) for p in g.players],
                          income=[round(p.income) for p in g.players], access=len(g.access) // 2, deals=len(g.deals), allies=len(g.allies) // 2,
+                         era=[A.era_of(p) for p in g.players], known=[len(p.known) for p in g.players], ships=ships, air=air, sea=sea,
+                         wars=sum(1 for (x, y) in g.hostile if g.war(x, y)), sat=[int(p.sat) for p in g.players],
                          attacks=sum(1 for b in new if b.get("aimed", 1) > 0), won=sum(1 for b in new if b.get("aimed", 1) > 0 and b.get("won"))))
     snap()
     while not g.over:
@@ -50,6 +58,8 @@ def main():
         if g.tick % 12 == 0: snap()
         if g.tick % 200 == 0: print("t%d units %d %.0fs" % (g.tick, len(g.units), time.time() - t0), flush=True)
     dump = lambda res: json.dump(dict(result=res, gens=used, side=side, falls=sorted(set((t, x) for p in g.players for t, k, x in p.events if k == "fall")),
+                                      tech=[[(x["t"], x["line"]) for x in p.tech_log if x["line"] in A.TREE] for p in g.players], strikes=[(t, p.faction, x) for p in g.players for t, k, x in p.events if "issile hit" in x],
+                                      spent=[{k: round(v) for k, v in p.spent.items()} for p in g.players], earned=[round(p.earned) for p in g.players],
                                       depot_events=[(t, p.faction, x) for p in g.players for t, k, x in p.events if k == "depot"]), open(out + ".json", "w"))
     res = dict(seed=seed, winner=g.winner, ticks=g.tick, provinces=[len(g.owned[i]) for i in range(n)], alive=[p.alive for p in g.players])
     rec.close(res)

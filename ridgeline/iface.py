@@ -289,17 +289,18 @@ class Session:
         L.append("THE CALENDAR IS COMPRESSED: this one war stands for the years 0 to %d (%d game hours; a game day is about %.1f years). The year shows in every observation." % (A.CAL_YEARS, A.CAL_HOURS, A.CAL_YEARS / (A.CAL_HOURS / 24.0)))
         L.append("AGES: everyone starts in the ancient world. You can raise only %s. Every other kind of unit, bigger forts, ships, aircraft, missiles and satellites must be DISCOVERED, "
                  "in the order the tree below allows: `research <discovery>` (uses one of your %d research slots; res cost and hours by age: %s; from the %s age on also strategic resources: %s). "
+                 "Strategic resources a discovery needs and you do not have are bought abroad at %d res each, automatically (for discoveries only, not for units or upgrades). "
                  "A discovery that a faction you have met already has is %d%% cheaper for you for each such faction (up to %d%%); 'q tree' and api.tree show your price now. "
                  "A discovery OPENS a kind of unit, or gives a kind a NEW MODEL, or changes what you can do. A model's attack and defence are the unit table's values (which describe the newest "
                  "model of all) times the nominal power of its age (%s; a second model inside one age x1.12), its range times %s (never under 1.5), and it needs steel only from the medieval age, oil only from the great-war age. "
                  "WHAT NOBODY KNOWS BEFOREHAND: your own version of a model is its nominal power times a hidden factor between %.2f and %.2f, drawn separately for you, for every kind and model, in this war. "
                  "So a new model is usually better than what you have, sometimes far better, sometimes hardly at all; you learn its real values only when the discovery is made (they are in the result and in api.stats). "
                  "As with all new models, units in the field keep the old one until you pay for `refit`. The UPGRADE lines of a kind (see UPGRADES) exist only for kinds you can raise, and what they gave carries over to later models."
-                 % (", ".join("%s (%s)" % (c, n) for c, n in A.START.items()), D.TECH_SLOTS,
+                 % ((", ".join("%s (%s)" % (c, n) for c, n in A.START.items()), D.TECH_SLOTS,
                     "; ".join("%s %d res %d h" % (A.ERAS[e], A.COST[e], A.HOURS[e]) for e in range(len(A.ERAS))), A.ERAS[1],
-                    "; ".join("%s %s" % (A.ERAS[e], "+".join("%d %s" % (v, k) for k, v in A.NEEDS[e])) for e in range(1, len(A.ERAS))),
+                    "; ".join("%s %s" % (A.ERAS[e], "+".join("%d %s" % (v, k) for k, v in A.NEEDS[e])) for e in range(1, len(A.ERAS))), A.MARKET,
                     round(A.DIFFUSE * 100), round(A.DIFFUSE_MAX * 100), " ".join("%s %.2f" % (A.ERAS[e], A.POW[e]) for e in range(len(A.ERAS))),
-                    "/".join("%g" % x for x in A.RNG), A.QUALITY[0], A.QUALITY[1]))
+                    "/".join("%g" % x for x in A.RNG), A.QUALITY[0], A.QUALITY[1])))
         L.append("THE TREE  discovery [age] <- what it needs first : what it brings")
         for t, (e, req, un, fx, word) in A.TREE.items():
             L.append(" %s [%s]%s : %s%s" % (t, A.ERAS[e], " <- " + ", ".join(req) if req else "", "; ".join("%s %s '%s'" % ("opens" if A.OPENED_BY[c] == t else "new model of", c, n) for c, n in un) or word,
@@ -340,7 +341,7 @@ class Session:
         for t, (e, req, un, fx, word) in A.TREE.items():
             st = A.status(g, p.id, t)
             out[t] = dict(status=st, age=A.ERAS[e], needs=list(req), missing=[r for r in req if r not in p.known], opens=[c for c, n in un if A.OPENED_BY[c] == t],
-                          new_models=[c for c, n in un if A.OPENED_BY[c] != t], effect=word, cost=A.cost(g, p.id, t) if st != "known" else None, hours=A.HOURS[e],
+                          new_models=[c for c, n in un if A.OPENED_BY[c] != t], effect=word, cost=A.cost(g, p.id, t) if st != "known" else None, res_now=A.price(g, p.id, t)[1] if st != "known" else None, hours=A.HOURS[e],
                           known_to_met=sum(1 for o in p.met if t in g.players[o].known))
         return out
 
@@ -351,8 +352,8 @@ class Session:
         tree = {}
         for t in A.TREE:
             if g.ages and A.status(g, p.id, t) == "open":
-                c = A.cost(g, p.id, t); lack = {k: v for k, v in c.items() if (p.res if k == "res" else p.bank[k]) < v}
-                tree[t] = dict(cost=c, can_pay_now=not lack, lacking=sorted(lack), days_of_net_income=round(c["res"] / net, 1) if net > 0 else None)
+                c = A.cost(g, p.id, t); pay, res, extra = A.price(g, p.id, t); lack = sorted(k for k, v in c.items() if k != "res" and p.bank[k] < v)
+                tree[t] = dict(cost=c, res_now=res, bought=extra, can_pay_now=p.res >= res, lacking=lack, days_of_net_income=round(res / net, 1) if net > 0 else None)
         return dict(res=round(p.res, 1), income=round(p.income, 1), upkeep_units=round(p.upkeep, 1), upkeep_works=round(p.maint, 1), net=round(net, 1),
                     days_left=round(p.res / -net, 1) if net < 0 else None, upkeep_share=round((p.upkeep + p.maint) / p.income, 3) if p.income > 0 else None,
                     earned=round(p.earned), spent={k: round(v) for k, v in p.spent.items()}, upkeep_by_kind={k: round(v, 1) for k, v in sorted(kinds.items())},
@@ -473,6 +474,7 @@ class Session:
             L["U%d" % prov] = t
         if rear_n: L["Ur"] = "U rear %du in %d provinces" % (rear_n, rear_p)
         for i in sorted(p.visible):
+            if not g.pos[i]: continue
             est = g.estimate(pid, i)
             if not est or not est[3]: continue
             lvl, c, st, n = est
@@ -537,7 +539,7 @@ class Session:
                                 progress=round(u.prog, 2), fighting=bool(u.fighting), supplied=u.supplied, group=u.group)
                            for u in g.punits[pid].values()],
                     enemy=[dict(province=i, exact=e[0] == 2, types=e[1], strength=e[2], count=e[3])
-                           for i in sorted(p.visible) for e in [g.estimate(pid, i)] if e and e[3]],
+                           for i in sorted(p.visible) if g.pos[i] for e in [g.estimate(pid, i)] if e and e[3]],
                     recruiting=[dict(type=q[0], province=q[1], hours_left=q[2]) for q in p.queue])
 
     # ============================================================ commands
@@ -903,7 +905,7 @@ class Session:
                 rows = ["year %d, your age: %s. discovery [age] status, your price now, hours; (n) = factions you have met that have it" % (A.year(g.tick), A.ERAS[A.era_of(p)])]
                 for t, v in self.tree_view().items():
                     if toks and toks[0] not in (v["status"], v["age"]) and not t.startswith(toks[0]): continue
-                    rows.append("%s [%s] %s%s%s (%d)" % (t, v["age"], v["status"], " needs " + ",".join(v["missing"]) if v["missing"] else "", " %s %dh" % (_cost(v["cost"]), v["hours"]) if v["cost"] and v["status"] != "researching" else "", v["known_to_met"]))
+                    rows.append("%s [%s] %s%s%s (%d)" % (t, v["age"], v["status"], " needs " + ",".join(v["missing"]) if v["missing"] else "", " %s (now %d res) %dh" % (_cost(v["cost"]), v["res_now"], v["hours"]) if v["cost"] and v["status"] != "researching" else "", v["known_to_met"]))
                 return "\n".join(rows)
             if k == "sea":
                 v = self.sea_view(self._prov(toks[0]) if toks else None)
@@ -1148,15 +1150,15 @@ class PolicyApi:
     api.enemy             {prov: dict(n, str, exact, types, who)}   enemy units you can currently see
     api.enemy_capital     nearest known enemy capital (province id or None)      api.enemy_capitals  {player id: province}
     api.year, api.age     the calendar year (0-2000) and the age of your latest discovery      api.can_raise  [unit kinds you can raise now]; api.stats / api.costs / api.unit_costs hold only those
-    api.tree              {discovery: dict(status 'known'|'researching'|'open'|'locked', age, needs [..], missing [..], opens [kinds], new_models [kinds], effect, cost (dict, your price now), hours, known_to_met)}
+    api.tree              {discovery: dict(status 'known'|'researching'|'open'|'locked', age, needs [..], missing [..], opens [kinds], new_models [kinds], effect, cost (dict, your price now), res_now (res it takes in all if started now, buying what you lack), hours, known_to_met)}
                           api.known = [discoveries you have]; start one with api.cmd("research <discovery>"). api.fort_cap = highest fort level you can build.
     api.budget            dict(res, income, upkeep_units, upkeep_works, net (per day), days_left (None unless net < 0), upkeep_share (upkeep / income), earned, spent {units, research, works, refit, depots, missiles},
                           upkeep_by_kind {kind: res per day}, units, in_training, res_in_training, research, stock, income_by, fuel_per_day,
-                          open_discoveries {discovery: dict(cost, can_pay_now, lacking [resources], days_of_net_income)})      see CAPITAL
+                          open_discoveries {discovery: dict(cost, res_now, bought (res of it that buys lacking resources), can_pay_now, lacking [resources], days_of_net_income)})      see CAPITAL
     api.sea               {sea zone id: dict(nbrs [zones], coast [land provinces on its shore], deep, x, y0, visible, reach (zones from your coast, None = beyond your shipping), closed (an enemy fleet shuts it to you), mine (your units there))}
                           only zones you have seen. api.provs[id]['coast'] = the zones a land province touches. api.transport_speed (0 = your troops cannot go by sea), api.sea_reach, api.ocean
     api.wars              [factions you are at war with now]      api.missiles, api.satellites (True/False), api.strike_cost
-                          api.units rows also have dom (0 land, 1 sea, 2 air), base (aircraft: its base province), at_sea (True for ships and for troops on transports)
+                          api.units rows also have dom (0 land, 1 sea, 2 air), base (aircraft: its base province), at_sea (True for ships and for troops on transports; their prov is then a sea zone id, which is in api.sea, not in api.provs)
     api.mem               dict kept between calls
     api.model             learned parameters loaded from a JSON file for this side ({} if none); see tools/fit_battle_model.py
     api.cmd(line)         run a command line, returns the result text
@@ -1180,7 +1182,7 @@ class PolicyApi:
         self.old_units = sum(1 for u in g.punits[p.id].values() if u.st is not p.stats[u.type])
         self.economy = sess.economy_view(); kd = p.known_dev
         self.depots = sess.depot_view(); self.depot_cost = D.DEPOT_COST; self.enemy_depots = {d: g.players[o].faction for d, o in p.known_depots.items()}
-        self.tree = sess.tree_view() if g.ages else {}; self.known = sorted(p.known); self.year = A.year(g.tick); self.age = A.ERAS[A.era_of(p)]; self.can_raise = sorted(p.stats)
+        self.tree = sess.tree_view(); self.known = sorted(p.known); self.year = A.year(g.tick); self.age = A.ERAS[A.era_of(p)]; self.can_raise = sorted(p.stats)
         self.budget = sess.budget_view(); self.sea = sess.sea_view(); self.wars = sorted(e.faction for e in g.players if e.id != pid and e.alive and g.war(pid, e.id))
         self.fort_cap = p.fort_cap; self.transport_speed = p.sail; self.sea_reach = p.sea_reach; self.ocean = p.ocean; self.missiles = p.missile; self.satellites = p.sat; self.strike_cost = dict(D.STRIKE)
         self.tech = sess.tech_view(); self.tech_log = [dict(x) for x in p.tech_log]; self.research = [list(r) for r in p.research]
@@ -1204,6 +1206,7 @@ class PolicyApi:
         self.unexplored = [i for i in sorted(rel) if g.provs[i].terrain != "water" and any(b not in rel for b in g.provs[i].nbrs)]
         self.enemy = {}
         for i in p.visible:
+            if not g.pos[i]: continue
             e = g.estimate(pid, i)
             if e and e[3]: self.enemy[i] = dict(n=e[3], str=e[2], exact=e[0] == 2, types=e[1], who=next(u.owner for u in g.pos[i] if u.owner != pid))
 

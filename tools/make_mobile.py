@@ -62,13 +62,15 @@ function draw(){if(lastPaint!==fr||lastSel!==sel)paintMap();const r=devicePixelR
  const bt=DATA.battles[fr]||[];ctx.strokeStyle='#ff3b30';ctx.lineWidth=Math.max(1.5,k);for(const p of bt){ctx.beginPath();ctx.arc(sx(DATA.px[p]),sy(DATA.py[p]),4+3*k,0,7);ctx.stroke()}
  const dp=DATA.depots[Math.min(DATA.depots.length-1,fr)]||[];for(let f=0;f<NF;f++){const m=dp[f]||{};for(const d in m){const x=sx(DATA.px[d]),y=sy(DATA.py[d]),q=5+2.5*k;ctx.fillStyle='#fff';ctx.strokeStyle='#000';ctx.lineWidth=1;ctx.fillRect(x-q/2,y-q/2,q,q);ctx.strokeRect(x-q/2,y-q/2,q,q)}}
  ctx.fillStyle='#ffd60a';ctx.fillStyle='#b8860b';ctx.font=(5+2.5*k)+'px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';for(let f=0;f<NF;f++){const cp=DATA.capitals[f];if(o[cp]===f)ctx.fillText('★',sx(DATA.px[cp]),sy(DATA.py[cp]))}
+ {const st=DATA.side[Math.min(DATA.side.length-1,fr)]||{};for(const z of st.sea||[]){const x=sx(DATA.px[z[0]]),y=sy(DATA.py[z[0]]),q=(z[2]===1?3:2)+1.2*k+Math.sqrt(z[3])*.5,cl=COL[z[1]];ctx.fillStyle='rgb('+cl.join(',')+')';ctx.strokeStyle=z[2]===1?'#fff':'#000';ctx.lineWidth=1;ctx.beginPath();if(z[2]===1){ctx.moveTo(x,y-q);ctx.lineTo(x+q,y);ctx.lineTo(x,y+q);ctx.lineTo(x-q,y)}else if(z[2]===2){ctx.moveTo(x,y-q);ctx.lineTo(x+q,y+q);ctx.lineTo(x-q,y+q)}else ctx.rect(x-q*.7,y-q*.7,q*1.4,q*1.4);ctx.closePath();ctx.fill();ctx.stroke()}}
  if(selP>=0){ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.beginPath();ctx.arc(sx(DATA.px[selP]),sy(DATA.py[selP]),9,0,7);ctx.stroke()}
  ui()}
-function ui(){const t=DATA.t[fr];document.getElementById('day').textContent=Math.min(Math.floor(t/24)+1,Math.ceil(DATA.t[F-1]/24))+'일차 / '+Math.ceil(DATA.t[F-1]/24)+'일';
+const ERA=['고대','중세','화약','산업','세계대전','현대','우주'];
+function ui(){const t=DATA.t[fr];document.getElementById('day').textContent=Math.min(Math.floor(t/24)+1,Math.ceil(DATA.t[F-1]/24))+'일차 / '+Math.ceil(DATA.t[F-1]/24)+'일'+(DATA.years?' · 서기 '+Math.round(t*DATA.years/DATA.t[F-1])+'년':'');
  const o=own[fr],pc=new Array(NF).fill(0),uc=new Array(NF).fill(0);for(let p=0;p<P;p++){const w=o[p];if(w>=0){pc[w]++;uc[w]+=cnt[fr*P+p]*DATA.div}}
  const alive=pc.filter(v=>v>0).length,dp=DATA.depots[Math.min(DATA.depots.length-1,fr)]||[];const st=DATA.side[Math.min(DATA.side.length-1,fr)]||{};
- document.getElementById('stats').textContent='남은 진영 '+alive+' · 불가침 협정 '+(st.pacts||0)+' · 지금까지 실제 공격 '+(st.att||0)+'회 (성공 '+(st.won||0)+')';
- const ord=[...Array(NF).keys()].sort((a,b)=>pc[b]-pc[a]);let h='';for(const f of ord){const nd=Object.keys(dp[f]||{}).length;h+='<div class="row'+(pc[f]?'':' dead')+(sel===f?' sel':'')+'" data-f="'+f+'"><span class="sw" style="background:rgb('+COL[f].join(',')+')"></span><span class="n">'+DATA.factions[f]+' <small style="color:#6e7681">'+DATA.models[f]+'</small></span><span class="v">땅 '+pc[f]+' · 유닛 '+uc[f]+' · 거점 '+nd+'</span></div>'}
+ document.getElementById('stats').textContent='남은 진영 '+alive+' · 불가침 협정 '+(st.pacts||0)+(DATA.years?' · 전쟁 중인 관계 '+(st.wars||0):'')+' · 지금까지 실제 공격 '+(st.att||0)+'회 (성공 '+(st.won||0)+')';
+ const ord=[...Array(NF).keys()].sort((a,b)=>pc[b]-pc[a]);let h='';for(const f of ord){const nd=Object.keys(dp[f]||{}).length;h+='<div class="row'+(pc[f]?'':' dead')+(sel===f?' sel':'')+'" data-f="'+f+'"><span class="sw" style="background:rgb('+COL[f].join(',')+')"></span><span class="n">'+DATA.factions[f]+' <small style="color:#6e7681">'+DATA.models[f]+'</small></span><span class="v">'+(st.era?ERA[st.era[f]]+' · ':'')+'땅 '+pc[f]+' · 유닛 '+uc[f]+(st.ships&&st.ships[f]?' · 함선 '+st.ships[f]:'')+(st.air&&st.air[f]?' · 항공기 '+st.air[f]:'')+'</span></div>'}
  document.getElementById('list').innerHTML=h;
  let e='';for(let i=Math.max(0,fr-5);i<=fr;i++)for(const x of (DATA.events[i]||[]))e=x;document.getElementById('ev').textContent=e;
  if(selP>=0){const w=o[selP],tip=document.getElementById('tip');let d='';if(w>=0&&dp[w]&&dp[w][selP]!==undefined)d='<br>보급 거점 (재산의 '+Math.round(dp[w][selP]*100)+'% 보관)';tip.style.display='block';tip.innerHTML='<b>P'+selP+'</b> '+(DATA.names[selP]||'')+'<br>'+(w>=0?DATA.factions[w]:'주인 없음')+' · 유닛 약 '+cnt[fr*P+selP]*DATA.div+d}else document.getElementById('tip').style.display='none'}
@@ -128,7 +130,8 @@ def main():
     for t in T:
         while j < len(ss) and ss[j]["t"] <= t: att += ss[j]["attacks"]; won += ss[j]["won"]; j += 1
         s = sd.get(t) or ss[min(len(ss) - 1, j - 1)]
-        dep.append(s["depots"]); st.append(dict(pacts=s["pacts"], att=att, won=won))
+        dep.append(s["depots"]); st.append(dict(pacts=s["pacts"], att=att, won=won, era=s.get("era"), ships=s.get("ships"), air=s.get("air"), wars=s.get("wars", 0),
+                                                  sea=[[int(v) for v in k_.split(":")] + [c_] for k_, c_ in (s.get("sea") or {}).items()]))
     ml = models.split(",") if models else [""] * nf
     rivers = []
     try:
@@ -142,7 +145,7 @@ def main():
                 models=[("Opus" if "opus" in x else "Haiku" if "haiku" in x else x) for x in ml], colors=colors(nf),
                 px=[round(p["cx"] / k, 1) for p in sc["provs"]], py=[round(p["cy"] / k, 1) for p in sc["provs"]], land=[int(p["terrain"] != "water") for p in sc["provs"]],
                 names={str(p["id"]): p["name"] for p in sc["provs"] if p.get("name")}, capitals=sc["capitals"], t=T, owner0=owner0, changes=changes,
-                counts=base64.b64encode(np.concatenate(counts).tobytes()).decode(), div=4, battles=battles, depots=dep, side=st, events=events)
+                years=2000 if any(x.get("era") for x in st) else 0, counts=base64.b64encode(np.concatenate(counts).tobytes()).decode(), div=4, battles=battles, depots=dep, side=st, events=events)
     html = PAGE.replace("__TITLE__", title).replace("__DATA__", json.dumps(data, separators=(",", ":"), ensure_ascii=False))
     open(out, "w", encoding="utf-8").write(html); print("wrote", out, "%.2f MB" % (os.path.getsize(out) / 1e6), len(T), "frames")
 

@@ -24,6 +24,7 @@ HOURS = (120, 200, 280, 360, 440, 520, 600)                # research time of a 
 COST = (200, 450, 800, 1400, 2100, 3000, 4500)             # its res cost ...
 NEEDS = ((), (("steel", 20),), (("steel", 40),), (("steel", 60), ("coal", 60)), (("steel", 80), ("coal", 60), ("oil", 80)),
          (("steel", 100), ("oil", 120), ("rubber", 60), ("rare", 20)), (("steel", 120), ("oil", 140), ("rubber", 60), ("rare", 60)))   # ... and what else
+MARKET = 8                             # res per unit of a strategic resource you lack when you start a discovery (bought abroad; discoveries only)
 DIFFUSE = 0.10; DIFFUSE_MAX = 0.5      # a discovery is this much cheaper for every faction you have met that already has it
 START = dict(inf="spearmen", mil="levy", rec="runners")     # what everyone has in the year 0
 
@@ -96,6 +97,15 @@ def cost(game, pid, name):
     c = dict(res=int(round(COST[e] * f)))
     for r, v in NEEDS[e]: c[r] = int(round(v * f))
     return c
+
+
+def price(game, pid, name):
+    """What starting the discovery would take out of the purse right now: (what is paid from stock, res in all, res of that spent buying what is lacking)."""
+    c = cost(game, pid, name); p = game.players[pid]; pay = {}; extra = 0
+    for k, v in c.items():
+        if k == "res": continue
+        have = int(p.bank[k]); pay[k] = min(v, have); extra += (v - pay[k]) * MARKET
+    return pay, c["res"] + extra, extra
 
 
 def model(p, code, g):

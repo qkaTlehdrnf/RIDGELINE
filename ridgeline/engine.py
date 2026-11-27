@@ -531,13 +531,10 @@ class Game:
             st = A.status(self, pid, line)
             if st != "open": return "%s is %s" % (line, "locked: it needs %s first" % ", ".join(r for r in A.TREE[line][1] if r not in p.known) if st == "locked" else st)
             if len(p.research) >= D.TECH_SLOTS: return "all %d research slots are busy" % D.TECH_SLOTS
-            cost = A.cost(self, pid, line)
-            for k, v in cost.items():
-                have = p.res if k == "res" else p.bank[k]
-                if have < v: return "need %d %s (have %d)" % (v, k, have)
-            for k, v in cost.items():
-                if k == "res": p.res -= v; p.spent["research"] += v
-                else: p.bank[k] -= v
+            pay, res, extra = A.price(self, pid, line)
+            if p.res < res: return "need %d res (have %d)%s" % (res, p.res, " (of which %d res to buy the strategic resources you lack, at %d res each)" % (extra, A.MARKET) if extra else "")
+            p.res -= res; p.spent["research"] += res
+            for k, v in pay.items(): p.bank[k] -= v
             p.research.append([line, 0, A.HOURS[A.TREE[line][0]]]); return None
         if line not in p._depth: return "unknown line '%s' (see 'q tech')" % line
         if "." in line and line.split(".")[0] not in p.stats: return "you cannot raise %s yet, so there is nothing to improve" % line.split(".")[0]

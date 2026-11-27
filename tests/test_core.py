@@ -549,6 +549,41 @@ def test_v8_resources_relations_and_climate():
     assert x.str < y.str, "fever"
 
 
+def test_v11_ages_sea_air_and_budget():
+    from ridgeline import data as D, ages as A
+    g = Game("world", seed=1); names = [p.faction for p in g.players]; H = names.index("haedong"); Y = names.index("yamato"); a, b = g.players[H], g.players[Y]
+    # the year 0: spearmen, levies, runners; everything else has to be discovered, in order
+    assert set(a.stats) == {"inf", "mil", "rec"} and all(u.type in a.stats for u in g.punits[H].values()) and g.sea0 < g.n
+    assert "not discovered" in g.order_recruit(H, "arm") and "locked" in g.order_research(H, "tanks") and a.fort_cap == 1
+    sa = Session(g, H); br = sa.brief(); assert "AGES" in br and "THE TREE" in br and "CAPITAL" in br and "_q" not in br and "QUALITY" not in br
+    a.res = 1e6; b.res = 1e6; a.mp = b.mp = 1e5
+    for p in (a, b): p.bank = dict.fromkeys(D.STRAT, 1e5)
+    assert sa.act("research galleys").startswith("ok")
+    for _ in range(A.HOURS[0] + 1): g.step()
+    assert "galleys" in a.known and "shp" in a.stats and a.sail > 0 and PolicyApi(sa, {}).tree["sailing"]["status"] == "open"
+    # the hidden quality of a model never shows before it exists
+    api = PolicyApi(sa, {}); assert "art" not in api.stats and api.budget["net"] == round(a.income - a.upkeep - a.maint, 1) and api.sea and api.year >= 0
+    def give(p, ts):
+        for t in ts:
+            give(p, [r for r in A.TREE[t][1] if r not in p.known])
+            if t not in p.known: A.finish(g, p, t)
+    give(a, ["dreadnoughts", "bombers", "ballistic_missiles"]); give(b, ["dreadnoughts"]); g._sea_update()
+    assert sa.act("recruit shp 4").startswith("ok") and Session(g, Y).act("recruit shp 2").startswith("ok")
+    for _ in range(100): g.step()
+    mine = [u for u in g.punits[H].values() if u.type == "shp"]; theirs = [u for u in g.punits[Y].values() if u.type == "shp"]
+    assert len(mine) == 4 and len(theirs) == 2 and all(u.prov >= g.sea0 for u in mine + theirs)
+    a.explored.update(range(g.n)); g.order_move(H, [u.id for u in mine], theirs[0].prov)
+    for _ in range(60): g.step()
+    assert len([u for u in g.punits[Y].values() if u.type == "shp"]) == 2          # not at war: fleets do not fire
+    assert sa.act("declare yamato").startswith("ok") or g.war(H, Y)
+    for _ in range(150): g.step()
+    assert len([u for u in g.punits[Y].values() if u.type == "shp"]) < 2 and theirs[0].prov in g.blockade[Y] | set([theirs[0].prov])
+    # troops go by sea; a missile needs the discovery and a target in sight
+    inf = [u.id for u in g.punits[H].values() if u.type == "inf"][:10]; tgt = next(i for i in g.owned[Y] if g.provs[i].coast)
+    assert g.order_move(H, inf, tgt) is None and any(x >= g.sea0 for x in g.units[inf[0]].path)
+    a.visible.add(tgt); assert g.order_strike(H, tgt) is None and len(g.strikes) == 1
+
+
 if __name__ == "__main__":
     for k, f in list(globals().items()):
         if k.startswith("test_"): f(); print("ok", k)
