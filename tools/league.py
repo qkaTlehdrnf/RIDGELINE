@@ -151,6 +151,8 @@ def report(pid, factions, games, detail="standard"):
         if rj:
             L.append(" commands that were refused, most frequent first (numbers replaced by N):")
             for k_, c_ in rj: L.append("  %dx %s" % (c_, k_))
+        cl = gme.get("calls", [[]] * n)[pid]
+        if cl: L.append(" calls your orders made to you (api.call_home): " + "; ".join("hour %d: %s" % (t_, w_) for t_, w_ in cl))
         ct = gme.get("counters", [{}] * n)[pid]
         if ct: L.append(" your own tallies (api.count): " + ", ".join("%s %d" % kv for kv in sorted(ct.items())))
         elif lvl >= 1: L.append(" your own tallies (api.count): none recorded")
@@ -199,26 +201,57 @@ def _kinds(g, pid):
     return c
 
 
-def play(policies, factions, seed, bmodel, max_ticks, letters=None):
+def play(policies, factions, seed, bmodel, max_ticks, letters=None, on_call=None, game=None, each=None):
     """One war. Returns result + per-faction command stats + battle log tagged with the defending owner."""
     from ridgeline.render import frame
-    n = len(factions); gmap = _map(seed, n)
-    g = Game(factions=factions, seed=seed, gmap=gmap, max_ticks=max_ticks); sess = [Session(g, i) for i in range(n)]
-    for s, f in zip(sess, policies):
-        s.set_policy("main", open(f, encoding="utf-8").read())
-        if bmodel: s.model = json.load(open(bmodel))
+    n = len(factions)
+    if game: g, sess = game; gmap = g.map                 # a war somebody else set up (tools/record_war.py); `each` is called after every hour
+    else:
+        gmap = _map(seed, n)
+        g = Game(factions=factions, seed=seed, gmap=gmap, max_ticks=max_ticks); sess = [Session(g, i) for i in range(n)]
+        for s, f in zip(sess, policies):
+            s.set_policy("main", open(f, encoding="utf-8").read())
+            if bmodel: s.model = json.load(open(bmodel))
     for to, rows in (letters or {}).items():           # letters written between the wars lie in the inbox at hour 0
         to = int(to)
         for frm, text in rows: g.players[to].mail.append(dict(t=0, frm=frm, text=text[:D.MAIL_LEN])); g.players[to].met.add(frm)
     tl = []; own_at = {}; errs = [None] * n
     age_t = [[] for _ in range(n)]                      # (year, age) whenever a faction enters a new age
+    def pack():
+        res = dict(seed=seed, winner=g.winner, ticks=g.tick, provinces=[g.owner.count(i) for i in range(n)], alive=[p.alive for p in g.players],
+                   units=[sum(1 for u in g.units.values() if u.owner == i) for i in range(n)], kills=[p.kills for p in g.players],
+                   start=dict(provs=[len(x) for x in gmap.start_provs], units=[len(x) for x in gmap.start_units]),
+                   policy_errors=[("removed: over the time budget" if "main" not in s.policies else errs[s.pid]) for s in sess])
+        battles = []
+        for b in g.battle_log:
+            b = dict(b); b["owner"] = own_at.get((b["prov"], b["side"]), -1); battles.append(b)
+        return dict(result=res, timeline=tl, battles=battles, land=sum(1 for p in g.provs if p.terrain != "water"),
+                    cmds=[(s.stats["cmds"], s.stats["errors"], "") for s in sess],
+                    tech=[[("year %d%s: " % (_AG.year(x["t"]), " (seeped in from abroad)" if x.get("leak") else "") if g.ages else "") + x["text"] for x in p.tech_log] for p in g.players], spent=[len(p.tech_log) for p in g.players],
+                    ages=[(_AG.ERAS[_AG.era_of(p)], len(p.known)) if g.ages else None for p in g.players], money=[dict(earned=round(p.earned), **{k: round(v) for k, v in p.spent.items()}) for p in g.players],
+                    age_t=age_t, open_end=[sorted((round(_AG.price(g, p.id, d)[1]), d, round(_AG.seeped(p, d), 2)) for d in _AG.TREE if _AG.status(g, p.id, d) == "open")[:12] if g.ages and p.alive else [] for p in g.players],
+                    bank=[dict(res=int(p.res), **{k: int(v) for k, v in p.bank.items()}) for p in g.players],
+                    inc=[{k: round(v) for k, v in p.inc.items()} for p in g.players],
+                    kinds=[_kinds(g, i) for i in range(n)],
+                    met=[sorted(g.met(i) | set(g.players[i].met)) for i in range(n)], dip=list(g.dip_log),
+                    rejects=[sorted(s_.rejects.items(), key=lambda kv: -kv[1])[:8] for s_ in sess], verbs=[dict(s_.verbs) for s_ in sess],
+                    army=[(s_.army_view(2) if g.players[s_.pid].alive else None) for s_ in sess], counters=[dict(s_.counters) for s_ in sess],
+                    depots=[dict(now=s_.depot_view(), log=[(t_, x_) for t_, k_, x_ in g.players[s_.pid].events if k_ == "depot"][-12:]) for s_ in sess],
+                    calls=[list(s_.call_log) for s_ in sess],
+                old=[sum(1 for u in g.punits[i].values() if u.st is not g.players[i].stats[u.type]) for i in range(n)])
     while not g.over:
         for k in g.assaults:
             if k not in own_at: own_at[k] = g.owner[k[0]]
         for s in sess:
             s.pre_tick()
             if "main" in s.policies and s.policies["main"]["err"]: errs[s.pid] = s.policies["main"]["err"]
+        if on_call:
+            reqs = [s for s in sess if s.call_req is not None]
+            if reqs: on_call(g, reqs, pack)
+        else:
+            for s in sess: s.call_req = None
         g.step()
+        if each: each()
         if g.ages and g.tick % 24 == 0:
             for p in g.players:
                 e = _AG.era_of(p)
@@ -227,26 +260,60 @@ def play(policies, factions, seed, bmodel, max_ticks, letters=None):
             tl.append(dict(t=g.tick, prov=[g.owner.count(i) for i in range(n)], units=[p.n_units for p in g.players],
                            income=[round(p.income - p.upkeep) for p in g.players], mp=[int(p.mp) for p in g.players], assaults=len(g.battles),
                            cond=[(s_.army_view(0) if g.players[s_.pid].alive else None) for s_ in sess]))
-    res = dict(seed=seed, winner=g.winner, ticks=g.tick, provinces=[g.owner.count(i) for i in range(n)], alive=[p.alive for p in g.players],
-               units=[sum(1 for u in g.units.values() if u.owner == i) for i in range(n)], kills=[p.kills for p in g.players],
-               start=dict(provs=[len(x) for x in gmap.start_provs], units=[len(x) for x in gmap.start_units]),
-               policy_errors=[("removed: over the time budget" if "main" not in s.policies else errs[s.pid]) for s in sess])
-    battles = []
-    for b in g.battle_log:
-        b = dict(b); b["owner"] = own_at.get((b["prov"], b["side"]), -1); battles.append(b)
-    return dict(result=res, timeline=tl, battles=battles, land=sum(1 for p in g.provs if p.terrain != "water"),
-                cmds=[(s.stats["cmds"], s.stats["errors"], "") for s in sess],
-                tech=[[("year %d%s: " % (_AG.year(x["t"]), " (seeped in from abroad)" if x.get("leak") else "") if g.ages else "") + x["text"] for x in p.tech_log] for p in g.players], spent=[len(p.tech_log) for p in g.players],
-                ages=[(_AG.ERAS[_AG.era_of(p)], len(p.known)) if g.ages else None for p in g.players], money=[dict(earned=round(p.earned), **{k: round(v) for k, v in p.spent.items()}) for p in g.players],
-                age_t=age_t, open_end=[sorted((round(_AG.price(g, p.id, d)[1]), d, round(_AG.seeped(p, d), 2)) for d in _AG.TREE if _AG.status(g, p.id, d) == "open")[:12] if g.ages and p.alive else [] for p in g.players],
-                bank=[dict(res=int(p.res), **{k: int(v) for k, v in p.bank.items()}) for p in g.players],
-                inc=[{k: round(v) for k, v in p.inc.items()} for p in g.players],
-                kinds=[_kinds(g, i) for i in range(n)],
-                met=[sorted(g.met(i) | set(g.players[i].met)) for i in range(n)], dip=list(g.dip_log),
-                rejects=[sorted(s_.rejects.items(), key=lambda kv: -kv[1])[:8] for s_ in sess], verbs=[dict(s_.verbs) for s_ in sess],
-                army=[(s_.army_view(2) if g.players[s_.pid].alive else None) for s_ in sess], counters=[dict(s_.counters) for s_ in sess],
-                depots=[dict(now=s_.depot_view(), log=[(t_, x_) for t_, k_, x_ in g.players[s_.pid].events if k_ == "depot"][-12:]) for s_ in sess],
-                old=[sum(1 for u in g.punits[i].values() if u.st is not g.players[i].stats[u.type]) for i in range(n)])
+    return pack()
+
+
+def world_text(sample, pid, bmodel):
+    return "\n\n".join(["RULES OF THE WORLD (the same briefing a live commander gets; the map changes every war, this one is only an example)\n" +
+                        Session(sample, pid).brief().split("\nPROVINCES id terrain")[0] + "\n" +
+                        "OBSERVATION" + Session(sample, pid).brief().split("\nOBSERVATION", 1)[1],
+                        "WHAT YOUR ORDERS CAN SEE AND DO\n" + PolicyApi.__doc__,
+                        "api.model: a table fitted on earlier battles of this world, a logistic regression for 'will this assault take the province': " +
+                        json.dumps({k: v for k, v in json.load(open(bmodel)).items() if k != "holdout"}) +
+                        "\np = sigmoid(b + sum(w*(x-mean)/std)); log_ratio = ln((attacker strength+1)/(defender strength+1)), terrain_dfn 1/1.25/1.5/2, bonus = plan bonus/100, att_rdy = readiness/100, heavy_share = share of art/eng/arm among attackers, dirs = directions. Use it or ignore it.",
+                        "HOW THE API IS CALLED (syntax only)\n```python\n%s```" % SYNTAX])
+
+
+def caller(factions, models, sample, bmodel, log, outdir, tag, pool, budget, detail=None, on_new=None):
+    """Answers api.call_home during a war: the faction's own model is shown the war so far and may replace its orders. Returns on_call(g, reqs, pack)."""
+    from ridgeline import ages as A
+    spent = [0.0]; n = len(factions)
+    def on_call(g, reqs, pack):
+        gm = pack()
+        def one(s):
+            pid = s.pid; why = s.call_req
+            if spent[0] >= budget: return None, "the budget for calls in this war is used up; no answer"
+            src = s.sources.get("main", ("", 6))[0]
+            prompt = "\n\n".join([world_text(sample, pid, bmodel),
+                "YOUR ORDERS CALLED YOU IN. It is hour %d of the war (the year %d). Their reason: %s\nCalls made before this one: %s. After this one %d call(s) are left in this war." % (
+                    g.tick, A.year(g.tick), why or "(none given)", "; ".join("hour %d: %s" % (t, w) for t, w in s.call_log) or "none", s.calls_left - 1),
+                "THE WAR SO FAR\n" + report(pid, factions, [gm], (detail or {}).get(str(pid), "standard")),
+                "WHAT YOUR FACTION SEES NOW\n" + s.obs("full")[:6000],
+                "YOUR CURRENT POLICY\n```python\n%s\n```" % src,
+                "The war goes on from this hour with whatever file you send; api.mem is kept. Reply with your reasoning in at most 120 words and the COMPLETE new file in one ```python block, "
+                "or with the single word KEEP to let the current file run on. No letters or feedback now."])
+            sysm = SYSTEM % dict(faction=factions[pid], blurb=D.FACTIONS[factions[pid]]["blurb"]); err = None; text = ""
+            for attempt in range(2):
+                try: text, cost = ask(models[pid], sysm, prompt if not err else prompt + "\n\nYour file was rejected by the test run: %s\nSend a corrected complete file." % err)
+                except Exception as ex: return None, "call failed: %s" % str(ex)[:200]
+                spent[0] += cost; log["cost"] = log.get("cost", 0.0) + cost
+                m = re.search(r"```python\n(.*?)```", text, re.S)
+                if not m: return None, "kept"
+                err = check(m.group(1), pid, factions, bmodel)
+                if not err: return m.group(1), text
+            return None, "both drafts failed (%s); the old file runs on" % err
+        for s, (code, text) in zip(reqs, list(pool.map(one, reqs))):
+            pid = s.pid; s.calls_left -= 1; s.call_log.append((g.tick, s.call_req)); s.call_req = None; how = text if code is None else "new file"
+            if code is not None:
+                mem = s.policies["main"]["mem"] if "main" in s.policies else {}
+                if "installed" in s.set_policy("main", code):
+                    s.policies["main"]["mem"] = mem
+                    d = os.path.join(outdir, factions[pid]); os.makedirs(d, exist_ok=True); f = os.path.join(d, "%s_call%d.py" % (tag, len(s.call_log)))
+                    open(f, "w", encoding="utf-8").write(code); open(f[:-3] + ".md", "w", encoding="utf-8").write(text)
+                    if on_new: on_new(pid, f)
+            g.event(pid, "info", "your author answered the call: %s" % how[:80])
+            print(" call %s hour %d (year %d) #%d: %s | %s | calls cost so far $%.2f" % (factions[pid], g.tick, A.year(g.tick), len(s.call_log), (s.call_log[-1][1] or "")[:80], how[:60], spent[0]), flush=True)
+    return on_call
 
 
 def main():
@@ -269,6 +336,7 @@ def main():
         from ridgeline import ages as _A
         _A.set_calendar(int(opt("--calendar", 9216)))             # game hours that stand for the 2,000 years
     max_ticks = int(opt("--max-ticks", 3000)); bmodel = os.path.join(ROOT, "policies", "model.json")
+    Session.CALLS = int(opt("--calls", 0)); call_budget = float(opt("--call-budget", 100.0))      # api.call_home: calls per faction and war, and the most all calls of one war may cost (US dollars)
     global OUT
     if "--out" in a: OUT = os.path.join(ROOT, opt("--out", "runs/league"))
     from concurrent.futures import ThreadPoolExecutor
@@ -299,15 +367,7 @@ def main():
         open(os.path.join(d, "gen%d_failed.md" % gen), "w", encoding="utf-8").write(text + "\n\nREJECTED: %s" % err)
         return cur[pid], text, "all drafts failed (%s); previous policy stays" % err
 
-    def world(pid):
-        return "\n\n".join(["RULES OF THE WORLD (the same briefing a live commander gets; the map changes every war, this one is only an example)\n" +
-                            Session(sample, pid).brief().split("\nPROVINCES id terrain")[0] + "\n" +
-                            "OBSERVATION" + Session(sample, pid).brief().split("\nOBSERVATION", 1)[1],
-                            "WHAT YOUR ORDERS CAN SEE AND DO\n" + PolicyApi.__doc__,
-                            "api.model: a table fitted on earlier battles of this world, a logistic regression for 'will this assault take the province': " +
-                            json.dumps({k: v for k, v in json.load(open(bmodel)).items() if k != "holdout"}) +
-                            "\np = sigmoid(b + sum(w*(x-mean)/std)); log_ratio = ln((attacker strength+1)/(defender strength+1)), terrain_dfn 1/1.25/1.5/2, bonus = plan bonus/100, att_rdy = readiness/100, heavy_share = share of art/eng/arm among attackers, dirs = directions. Use it or ignore it.",
-                            "HOW THE API IS CALLED (syntax only)\n```python\n%s```" % SYNTAX])
+    def world(pid): return world_text(sample, pid, bmodel)
 
     start = len(log["gens"])
     for pid in [i for i in range(n) if cur[i] is None and start > 0]:      # a faction that joins a running league writes its first orders now
@@ -322,7 +382,10 @@ def main():
                 d = os.path.join(OUT, factions[pid]); f = os.path.join(d, "gen0.py"); open(f, "w").write("def tick(api):\n    pass\n")
             cur[pid] = f; print(" %s (%s): %s" % (factions[pid], models[pid], how), flush=True)
     for gen in range(start + 1, start + gens + 1):
-        t0 = time.time(); games = [play(cur, factions, s, bmodel, max_ticks, log.get("letters")) for s in seeds]
+        t0 = time.time(); live = {}
+        oc = caller(factions, models, sample, bmodel, log, OUT, "gen%d" % (gen - 1), POOL, call_budget, log.get("detail"), lambda pid, f: live.__setitem__(pid, f)) if Session.CALLS else None
+        games = [play(cur, factions, s, bmodel, max_ticks, log.get("letters"), oc) for s in seeds]
+        for pid, f in live.items(): cur[pid] = f                # the file a faction sent during the war is the one it now holds
         det = log.setdefault("detail", {})
         inbox = log.get("letters") or {}; met = [set(i for g_ in games for i in g_["met"][p_]) for p_ in range(n)]
         summ = []

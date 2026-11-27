@@ -56,6 +56,7 @@ class Session:
         self.front = set()          # unit ids under the automatic front-line order
         self.resting = set()        # front units pulled back to recover
         self.counters = {}          # the policy's own tallies (api.count): shown back to the faction in its review
+        self.calls_left = Session.CALLS; self.call_req = None; self.call_log = []      # the policy may call its author back in during the war (api.call_home); served by whoever runs the war
         self.expand = set()         # unit ids under the standing order to keep taking neutral land
         self.expand_x = 3.0         # a party sent against a free province is this many times the strength of the people seen there
         self.expand_to = {}         # unit id -> province the commander picked as the area to expand around
@@ -69,6 +70,8 @@ class Session:
         self.candidates = {}        # strategies a commander has drafted for trials: name -> (code, every)
 
     # ============================================================ brief
+    CALLS = 0                   # how often a faction's orders may call their author back in during one war (0 = nobody is there to answer)
+
     def brief(self):
         g, p = self.g, self.p; eps = [e for e in g.players if e.id != self.pid]; L = []
         L.append("RIDGELINE. You are P%d (%s) against %s. Every faction fights every other; there are no alliances." % (
@@ -345,6 +348,10 @@ class Session:
                      "twice as long if it owns almost none; a faction 1, 2, 3 ages ahead of the locals takes a 4th, a 9th, a 16th of that. Several neighbours each fill their own share and the first to be full gets the province, "
                      "with its militia gone and nothing wrecked; it waits while another faction's troops stand there."
                      % (D.LOCAL_BASE * D.LOCAL_SPREAD[0], D.LOCAL_BASE * D.LOCAL_SPREAD[1], D.LOCAL_CITY, D.LOCAL_HARSH, D.LOCAL_ATK, D.LOCAL_DFN, D.LOCAL_LAG, round(D.LOCAL_HEAL * 100), D.LOCAL_JOIN, round(D.LOCAL_JOIN * A.CAL_HOURS / A.CAL_YEARS / 24.0)))
+        if Session.CALLS:
+            L.append("CALLING YOUR AUTHOR: a war is long and your standing orders are written before it. Up to %d times in one war your orders can call you back in with api.call_home('why'). "
+                     "The war stops at that hour; you are shown your reason, where your faction stands, a review of the war so far and your current file, and you may send a new file, which takes over from that hour (api.mem is kept). "
+                     "When to call, how often, and whether at all is for your orders to decide: nothing calls you unless they do. api.calls_left shows what is left; calls that are not used are simply lost." % Session.CALLS)
         L.append("ROADS AND RAILWAYS join two neighbouring provinces (the infrastructure level above is what stands INSIDE one province: streets, yards, stores). "
                  "`road P<a> P<b>` builds a road, `rail P<a> P<b>` a railway (it replaces the road). Neighbours: that one stretch. Provinces further apart: the shortest way between them through your own supplied land, "
                  "as many stretches from P<a>'s end as you can pay for now (the reply says how many were started). Both ends of a stretch must be yours%s. "
@@ -1166,6 +1173,9 @@ class PolicyApi:
     api.army(level=0)     dict: condition of your own army and supply, at the detail you choose (same as `q army`): 0 totals {n, rdy, mor, str, ready, spent,
                           dry, moving, contact, fighting, unsupplied}; 1 adds by_type, by_order, front {units_per_province, stock_mean, stock_empty, inflow_per_h,
                           burn_per_h, short}; 2 adds provinces [{prov, n, rdy, mor, dry, moving, stock, inflow, burn, hops, fort, border}]
+    api.call_home(why)    call your author (the one who wrote these orders) back in, now. Returns True if the call is placed, False if none are left (api.calls_left) or one is already waiting.
+                          The war stops; the author is shown `why` (up to 400 characters), the state of the faction, the review of the war so far and this file, and may replace the file.
+                          api.mem is kept. api.calls_left = calls you still have in this war; api.calls = [(hour, why), ...] the calls made so far.
     api.count(name, n=1)  add to a tally of your own (up to 60 names). It changes nothing in the war; your tallies are shown to you in the review afterwards,
                           e.g. to see how often a condition in your orders was met or not
     api.me                your faction's name
@@ -1241,6 +1251,7 @@ class PolicyApi:
         self.depots = sess.depot_view(); self.depot_cost = D.DEPOT_COST; self.enemy_depots = {d: g.players[o].faction for d, o in p.known_depots.items()}
         self.tree = sess.tree_view(); self.known = sorted(p.known); self.year = A.year(g.tick); self.age = A.ERAS[A.era_of(p)]; self.can_raise = sorted(p.stats)
         self.budget = sess.budget_view(); self.sea = sess.sea_view(); self.wars = sorted(e.faction for e in g.players if e.id != pid and e.alive and g.war(pid, e.id))
+        self.calls_left = sess.calls_left; self.calls = list(sess.call_log)
         self.overseas = {}
         if p.sail > 0:
             rz = g.searange[pid]; blk = g.blockade[pid]; ex = p.explored; ow = g.owner
@@ -1280,6 +1291,11 @@ class PolicyApi:
     def count(self, name, n=1):
         c = self._s.counters; name = str(name)[:40]
         if name in c or len(c) < 60: c[name] = c.get(name, 0) + n
+    def call_home(self, why=""):
+        """Ask your author to step in now. True if the call is placed (it is answered before the next hour is played)."""
+        s = self._s
+        if s.calls_left <= 0 or s.call_req is not None: return False
+        s.call_req = str(why)[:400]; return True
     def cmd(self, line): return self._s.act(line)
     def q(self, text): return self._s.query(text)
     def path(self, a, b): return self._s.known_path(a, b)

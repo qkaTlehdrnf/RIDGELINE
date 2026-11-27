@@ -58,9 +58,7 @@ def main():
                                       depot_events=[(t, p.faction, x) for p in g.players for t, k, x in p.events if k == "depot"]), open(f or out + ".json", "w"))
     part = lambda: dict(seed=seed, winner=None, ticks=g.tick, provinces=[len(g.owned[i]) for i in range(n)], alive=[p.alive for p in g.players])
     snap()
-    while not g.over:
-        for s in sess: s.pre_tick()
-        g.step()
+    def after():
         if g.tick % every == 0: rec.frame()
         if g.tick % 12 == 0: snap()
         if g.tick % 240 == 0: city.append([g.tick] + [int(round(g.prod[i])) for i in cities])
@@ -69,6 +67,21 @@ def main():
             if not links or links[-1][1:] != row: links.append([g.tick] + row)
         if g.tick % 2400 == 0: dump(part(), out + ".part.json")          # so that a long war can be looked at (and is not lost) before it ends
         if g.tick % 200 == 0: print("t%d units %d %.0fs" % (g.tick, len(g.units), time.time() - t0), flush=True)
+    calls = int(opt("--calls", 0))
+    if calls:                                                    # the factions' models answer api.call_home during this war: this costs money
+        import league as LG
+        from concurrent.futures import ThreadPoolExecutor
+        LG.WORLD = 1.0; log = dict(cost=0.0); tag = opt("--tag", "war")
+        for s in sess: s.calls_left = calls
+        Session.CALLS = calls; models = opt("--models", "").split(","); assert len(models) == n, "--calls needs --models with one model per faction"
+        oc = LG.caller(factions, models, g, bm, log, pol, tag, ThreadPoolExecutor(int(opt("--jobs", 6))), float(opt("--call-budget", 100.0)))
+        LG.play(None, factions, seed, bm, hours, None, oc, game=(g, sess), each=after)
+        json.dump(dict(cost=log["cost"], calls=[[g.players[s.pid].faction] + [list(c) for c in s.call_log] for s in sess]), open(out + ".calls.json", "w"), indent=1, ensure_ascii=False)
+        print("calls cost $%.2f" % log["cost"], flush=True)
+    else:
+        while not g.over:
+            for s in sess: s.pre_tick()
+            g.step(); after()
     res = dict(seed=seed, winner=g.winner, ticks=g.tick, provinces=[len(g.owned[i]) for i in range(n)], alive=[p.alive for p in g.players])
     rec.close(res)
     dump(res)
