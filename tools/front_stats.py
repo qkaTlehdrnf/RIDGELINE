@@ -31,8 +31,10 @@ def main(path, seed=1):
     alle = [(a, b) for a in land for b in nb[a] if a < b]
     rough = lambda e: terr[e[0]] in ("hill", "mountain") or terr[e[1]] in ("hill", "mountain")
     out["rough_share_all_edges"] = round(sum(map(rough, alle)) / len(alle), 3)
+    riv = lambda e: e[1] in g.provs[e[0]].river
+    out["river_share_all_edges"] = round(sum(map(riv, alle)) / len(alle), 3)
     E = {d: edges(o) for d, o in snaps.items()}
-    out["borders"] = {d: dict(edges=len(e), rough_share=round(sum(map(rough, e)) / max(1, len(e)), 3)) for d, e in sorted(E.items())}
+    out["borders"] = {d: dict(edges=len(e), rough_share=round(sum(map(rough, e)) / max(1, len(e)), 3), river_share=round(sum(map(riv, e)) / max(1, len(e)), 3)) for d, e in sorted(E.items())}
     ds = sorted(E)
     out["border_kept"] = {"%d->%d" % (a, b): round(len(E[a] & E[b]) / max(1, len(E[a])), 3) for a, b in zip(ds, ds[1:]) if E[a]}
     print(json.dumps(out, indent=1))
