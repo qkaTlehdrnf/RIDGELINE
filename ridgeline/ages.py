@@ -87,6 +87,19 @@ for _c in GENS: GENS[_c].sort(key=lambda g: (g[2], g[0] is not None))
 OPENED_BY = {c: g[0][0] for c, g in GENS.items()}          # kind -> discovery that opens it (None: there from the start)
 
 
+_BASE = None
+
+
+def set_calendar(hours):
+    """Stretch the same 2,000 years over `hours` game hours: discoveries cost and take proportionally more, knowledge seeps proportionally slower
+    (income per hour is unchanged, so the pace in YEARS stays the same). Call before a Game is made."""
+    global CAL_HOURS, HOURS, COST, NEEDS, SEEP, SEEP_FULL, _BASE
+    if _BASE is None: _BASE = (CAL_HOURS, HOURS, COST, SEEP, SEEP_FULL, NEEDS)
+    k = hours / float(_BASE[0]); CAL_HOURS = int(hours)
+    HOURS = tuple(int(round(x * k)) for x in _BASE[1]); COST = tuple(int(round(x * k)) for x in _BASE[2]); SEEP = _BASE[3] / k; SEEP_FULL = int(round(_BASE[4] * k))
+    NEEDS = tuple(tuple((r, int(round(v * k))) for r, v in row) for row in _BASE[5])
+
+
 def year(tick): return int(tick * CAL_YEARS / CAL_HOURS)
 
 

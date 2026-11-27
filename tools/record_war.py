@@ -26,6 +26,7 @@ def main():
     opt = lambda k, d: a[a.index(k) + 1] if k in a else d
     seed = int(opt("--seed", 1)); hours = int(opt("--hours", 2400)); out = opt("--out", "runs/replays/war"); pol = opt("--pol-dir", "runs/league_world"); top = int(opt("--gen", 10 ** 6)); every = int(opt("--every", 1))
     from ridgeline.worldgen import gen_world
+    if "--calendar" in a: A.set_calendar(int(opt("--calendar", 9216)))      # game hours that stand for the 2,000 years (default 9216)
     factions = tuple(w[0] for w in D.WORLD); g = Game(factions=factions, seed=seed, gmap=gen_world(seed, scale=1.0), max_ticks=hours); n = len(g.players)
     sess = [Session(g, i) for i in range(n)]; bm = os.path.join(ROOT, "policies", "model.json"); used = []
     for s in sess:
@@ -50,17 +51,19 @@ def main():
                          era=[A.era_of(p) for p in g.players], known=[len(p.known) for p in g.players], ships=ships, air=air, sea=sea,
                          wars=sum(1 for (x, y) in g.hostile if g.war(x, y)), sat=[int(p.sat) for p in g.players],
                          attacks=sum(1 for b in new if b.get("aimed", 1) > 0), won=sum(1 for b in new if b.get("aimed", 1) > 0 and b.get("won"))))
+    dump = lambda res, f=None: json.dump(dict(result=res, gens=used, side=side, falls=sorted(set((t, x) for p in g.players for t, k, x in p.events if k == "fall")),
+                                      tech=[[(x["t"], x["line"]) for x in p.tech_log if x["line"] in A.TREE] for p in g.players], strikes=[(t, p.faction, x) for p in g.players for t, k, x in p.events if "issile hit" in x],
+                                      spent=[{k: round(v) for k, v in p.spent.items()} for p in g.players], earned=[round(p.earned) for p in g.players],
+                                      depot_events=[(t, p.faction, x) for p in g.players for t, k, x in p.events if k == "depot"]), open(f or out + ".json", "w"))
+    part = lambda: dict(seed=seed, winner=None, ticks=g.tick, provinces=[len(g.owned[i]) for i in range(n)], alive=[p.alive for p in g.players])
     snap()
     while not g.over:
         for s in sess: s.pre_tick()
         g.step()
         if g.tick % every == 0: rec.frame()
         if g.tick % 12 == 0: snap()
+        if g.tick % 2400 == 0: dump(part(), out + ".part.json")          # so that a long war can be looked at (and is not lost) before it ends
         if g.tick % 200 == 0: print("t%d units %d %.0fs" % (g.tick, len(g.units), time.time() - t0), flush=True)
-    dump = lambda res: json.dump(dict(result=res, gens=used, side=side, falls=sorted(set((t, x) for p in g.players for t, k, x in p.events if k == "fall")),
-                                      tech=[[(x["t"], x["line"]) for x in p.tech_log if x["line"] in A.TREE] for p in g.players], strikes=[(t, p.faction, x) for p in g.players for t, k, x in p.events if "issile hit" in x],
-                                      spent=[{k: round(v) for k, v in p.spent.items()} for p in g.players], earned=[round(p.earned) for p in g.players],
-                                      depot_events=[(t, p.faction, x) for p in g.players for t, k, x in p.events if k == "depot"]), open(out + ".json", "w"))
     res = dict(seed=seed, winner=g.winner, ticks=g.tick, provinces=[len(g.owned[i]) for i in range(n)], alive=[p.alive for p in g.players])
     rec.close(res)
     dump(res)
