@@ -317,3 +317,13 @@ AIR_REST = 5.0            # readiness regained per hour on the ground at its bas
 AIR_HOME = 35
 STRIKE = dict(res=260, oil=40, rare=12)      # one long-range missile
 STRIKE_HOURS = 6; STRIKE_DMG = 22.0          # hours of flight; strength taken from every unit in the province (forts halve it)
+
+# --- roads and railways: links between two neighbouring provinces (v13) ---
+ROAD_COST = 12; ROAD_HOURS = 36                              # res per stretch (x the ground's movement cost, x LINK_RIVER across a river: a bridge)
+RAIL_COST = 40; RAIL_NEED = ("steel", 8); RAIL_HOURS = 72    # likewise; a railway replaces the road on that stretch
+LINK_RIVER = 2.0; LINK_GROUND = 16.0                         # prices are for open plain (movement cost 16); other ground costs in proportion (mountain about x2.75)
+ROAD_KEEP = 0.03; RAIL_KEEP = 0.10                           # res a day per stretch
+ROAD_MOVE = 1.5; RAIL_MOVE = 4.0                             # land units move this much faster along the stretch (rail: only its owner's and access partners' units, out of contact)
+ROAD_HOP = 0.6; RAIL_HOP = 0.3                               # a supply step along the stretch counts this much
+LINK_ROAD = 0.10; LINK_RAIL = 0.25                           # added to how much of the neighbour's development counts towards your market
+LINK_NEED = dict(road="roads", rail="railways")              # the discovery each kind needs (on maps with the tree)

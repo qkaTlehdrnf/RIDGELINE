@@ -63,7 +63,7 @@ class Player:
         self.tech = {}; self.dead = set(); self.research = []; self.tech_log = []   # line -> levels done; closed lines; [line, level, hours left]; results
         self.mult = dict(res=1.0, steel=1.0, oil=1.0, rare=1.0, mp=1.0, flow=1.0, heal=1.0, plan=1.0, rest=1.0); self.mor0 = 0.0
         self._depth = {}; self._size = {}                   # HIDDEN: how far each line goes for this faction, and what each level is worth
-        self.works = []; self.maint = 0.0; self.known_dev = {}   # [kind, prov, hours left] being built; res a day spent on keeping up cities and roads; {prov: (dev, infra)} last seen
+        self.known_link = {}; self.works = []; self.maint = 0.0; self.known_dev = {}   # [kind, prov, hours left] being built; res a day spent on keeping up cities and roads; {prov: (dev, infra)} last seen
         self.spent = dict(units=0.0, research=0.0, works=0.0, refit=0.0, depots=0.0, missiles=0.0, upkeep=0.0); self.earned = 0.0    # res paid out so far, by purpose; res taken in so far
         self.fxp = {}                                # formation experience per group name (0-100): units that fight together
 
@@ -96,6 +96,7 @@ class Game:
         self.battles = {}; self.contacts = []
         self.assaults = {}; self.battle_log = []     # open assault episodes; finished ones (training data)
         self._sight = {}
+        self._note = ""; self.lk = [dict() for _ in range(self.n)]; self._lkmax = 1.0     # roads (1) and railways (2) to neighbours: lk[a][b] == lk[b][a]
         self.dev = [0.0] * self.n; self.infra = [0.0] * self.n; self.access = set()    # development and infrastructure per province; ordered pairs of factions that opened their roads to each other
         self.prod = [float(pr.y) for pr in self.provs]; self.prod_mp = [float(pr.mp) for pr in self.provs]; self.agg = [1.0] * self.n   # what each province yields now
         self.deals = {}; self.allies = set()         # standing deliveries {id: ...}; ordered pairs of allied factions
@@ -319,7 +320,20 @@ class Game:
         return b in self.provs[a].river and not (a in self.cold and b in self.cold)
 
     def bridged(self, pid, a, b):
-        return self.owner[a] == pid and self.owner[b] == pid and self.infra[a] >= D.RIVER_BRIDGE and self.infra[b] >= D.RIVER_BRIDGE
+        if self.owner[a] == pid and self.owner[b] == pid and self.infra[a] >= D.RIVER_BRIDGE and self.infra[b] >= D.RIVER_BRIDGE: return True
+        return b in self.lk[a] and self.rides(pid, a, b)                # a road or railway across a river is a bridge for those who hold both banks
+
+    def rides(self, pid, a, b):
+        """May pid's units and supplies use what is built between a and b as their own? Both ends its own or an access partner's."""
+        oa = self.owner[a]; ob = self.owner[b]
+        return (oa == pid or (pid, oa) in self.access) and (ob == pid or (pid, ob) in self.access)
+
+    def link_speed(self, u, a, b):
+        """How much faster unit u moves from a to b because of a road or railway there (1.0 = none)."""
+        l = self.lk[a].get(b)
+        if not l or u.st["dom"]: return 1.0
+        if l == 2 and not u.contact and not u.rout and self.rides(u.owner, a, b): return D.RAIL_MOVE
+        return D.ROAD_MOVE
 
     def move_cost(self, u, prov):
         pr = self.provs[prov]; dom = u.st["dom"]
@@ -360,7 +374,7 @@ class Game:
 
     def _path(self, src, dst, unit, own, known=None):
         dist = {src: 0.0}; prev = {}; provs = self.provs; done = set()
-        tx, ty = provs[dst].cx, provs[dst].cy; k = 2.2 / (unit.st["spd"] if unit else 1.0)     # A*: hours per cell on the cheapest ground (close to admissible)
+        tx, ty = provs[dst].cx, provs[dst].cy; k = 2.2 / (unit.st["spd"] if unit else 1.0) / self._lkmax; lk = self.lk     # A*: hours per cell on the cheapest ground (close to admissible)
         heap = [(0.0, src)]
         if unit is not None and (unit.st["dom"] or src >= self.sea0 or (own is None and self.players[unit.owner].sail > 0 and self.sea0 < self.n)):
             return self._path_x(src, dst, unit, known)
@@ -374,6 +388,7 @@ class Game:
                 if known is not None and b not in known and b != dst: continue
                 if b in provs[a].lane and not (unit and self.players[unit.owner].ocean): continue
                 nd = d + (self.move_cost(unit, b) if unit else provs[b].cost)
+                if unit and b in lk[a]: nd = d + (nd - d) / self.link_speed(unit, a, b)
                 if b in provs[a].river and self.river(a, b) and not (unit and self.bridged(unit.owner, a, b)): nd += provs[a].cost * 0.5 * (1.0 / D.RIVER_MOVE - 1.0) / (unit.st["spd"] if unit else 1.0)
                 if nd < dist.get(b, 1e18):
                     dist[b] = nd; prev[b] = a; pb = provs[b]
@@ -406,6 +421,7 @@ class Game:
                         if known is not None and b not in known and b != dst and not wb: continue
                 pb = provs[b]; nd = d + self.move_cost(unit, b) * (max(1.0, ((pa.cx - pb.cx) ** 2 + (pa.cy - pb.cy) ** 2) ** 0.5 / sp) if (wb or wa or dom == 2) else 1.0)
                 if dom == 0:
+                    if not wa and not wb and b in self.lk[a]: nd = d + (nd - d) / self.link_speed(unit, a, b)
                     if wa != wb: nd += emb
                     elif not wb and b in pa.river and self.river(a, b) and not self.bridged(unit.owner, a, b): nd += pa.cost * 0.5 * (1.0 / D.RIVER_MOVE - 1.0) / unit.st["spd"]
                 if nd < dist.get(b, 1e18):
@@ -854,13 +870,13 @@ class Game:
     def market(self, prov):
         """Developed mass within reach: its own, plus its neighbours' and their neighbours', each step weakened by how poor the roads between them are.
         Only land of the same owner counts, or of an owner who has opened its roads to this one."""
-        dev = self.dev; infra = self.infra; provs = self.provs; m = self.dev_eff(prov); L0 = D.LINK; L1 = D.LINK_INFRA
+        dev = self.dev; infra = self.infra; provs = self.provs; m = self.dev_eff(prov); L0 = D.LINK; L1 = D.LINK_INFRA; lk = self.lk; LK = (0.0, D.LINK_ROAD, D.LINK_RAIL)
         if self.owner[prov] < 0: return m
         for b in provs[prov].nbrs:
             if not self.linked(prov, b): continue
-            l = L0 + L1 * min(infra[prov], infra[b]); m += l * dev[b]
+            l = L0 + L1 * min(infra[prov], infra[b]) + LK[lk[prov].get(b, 0)]; m += l * dev[b]
             for c in provs[b].nbrs:
-                if c != prov and dev[c] > 0 and self.linked(b, c): m += l * (L0 + L1 * min(infra[b], infra[c])) * dev[c]
+                if c != prov and dev[c] > 0 and self.linked(b, c): m += l * (L0 + L1 * min(infra[b], infra[c]) + LK[lk[b].get(c, 0)]) * dev[c]
         return m
 
     def _wealth(self):
@@ -876,13 +892,15 @@ class Game:
 
     def _econ_day(self):
         """Once a day: cities grow where the market is good and there is room, upkeep is charged, and what cannot be kept up decays."""
-        dev = self.dev; infra = self.infra; fought = set(self.battles); fort = self.fort; pos = self.pos; own = self.owner
+        dev = self.dev; infra = self.infra; fought = set(self.battles); fort = self.fort; pos = self.pos; own = self.owner; lk = self.lk; KL = (0.0, D.ROAD_KEEP * 0.5, D.RAIL_KEEP * 0.5)
         for i in range(self.n):                                  # unmanned works fall in
             if fort[i] > 0.0 and own[i] >= 0 and not any(u.owner == own[i] for u in pos[i]): fort[i] = max(0.0, fort[i] - D.FORT_DECAY)
         for p in self.players:
             if not p.alive: p.maint = 0.0; continue
             m = 0.0; broke = p.res <= 0.0 and p.income < p.upkeep + p.maint
             for i in self.owned[p.id]:
+                if lk[i]:
+                    for l_ in lk[i].values(): m += KL[l_]            # each end pays half of a stretch's upkeep
                 d = dev[i]; L = infra[i]
                 if d <= 0 and L <= 0: continue
                 if broke:
@@ -923,6 +941,45 @@ class Game:
         if p.bank[k] < n: return "need %d %s (have %d)" % (n, k, p.bank[k])
         p.res -= res; p.spent["works"] += res; p.bank[k] -= n; p.works.append([kind, prov, D.DEV_HOURS if kind == "dev" else D.INFRA_HOURS]); return None
 
+    def link_cost(self, a, b, kind):
+        """(res, resource, amount, hours) for one stretch of road or railway between neighbours a and b."""
+        pa = self.provs[a]; pb = self.provs[b]; f = (pa.cost + pb.cost) / 2.0 / D.LINK_GROUND * (D.LINK_RIVER if b in pa.river else 1.0)
+        if kind == "rail": return int(round(D.RAIL_COST * f)), D.RAIL_NEED[0], int(round(D.RAIL_NEED[1] * f)), D.RAIL_HOURS
+        return int(round(D.ROAD_COST * f)), None, 0, D.ROAD_HOURS
+
+    def order_link(self, pid, a, b, kind="road"):
+        """Build a road or a railway from province a to province b. Neighbours: that one stretch. Further apart: along the shortest way through
+        your own supplied land, as many stretches from a's end as you can pay for now. Both ends of every stretch must be yours."""
+        p = self.players[pid]; n0 = self.sea0; lvl = 2 if kind == "rail" else 1
+        for x in (a, b):
+            if not (0 <= x < n0) or self.owner[x] != pid: return "P%d is not yours" % x
+        if a == b: return "name two different provinces"
+        if self.ages and D.LINK_NEED[kind] not in p.known: return "you need the discovery %s first" % D.LINK_NEED[kind]
+        if b in self.provs[a].nbrs and b not in self.provs[a].sea: way = [a, b]
+        else:
+            prev = {a: a}; q = [a]; k = 0
+            while k < len(q) and b not in prev:
+                x = q[k]; k += 1
+                for y in self.provs[x].nbrs:
+                    if y not in prev and y < n0 and self.owner[y] == pid and y in p.supplied and y not in self.provs[x].sea: prev[y] = x; q.append(y)
+            if b not in prev: return "no way from P%d to P%d through your own supplied land" % (a, b)
+            way = [b]
+            while way[-1] != a: way.append(prev[way[-1]])
+            way.reverse()
+        busy = set((w[1], w[3]) for w in p.works if w[0] in ("road", "rail") and (w[0] == "rail" or kind == "road"))
+        todo = [(x, y) for x, y in zip(way, way[1:]) if self.lk[x].get(y, 0) < lvl and (x, y) not in busy and (y, x) not in busy]
+        if not todo: return "that is already built or being built"
+        done = 0
+        for x, y in todo:
+            res, k, n, h = self.link_cost(x, y, kind)
+            if p.res < res or (k and p.bank[k] < n):
+                if done: break
+                return "need %d res%s for the first stretch (have %d res%s)" % (res, " and %d %s" % (n, k) if k else "", p.res, ", %d %s" % (p.bank[k], k) if k else "")
+            p.res -= res; p.spent["works"] += res
+            if k: p.bank[k] -= n
+            p.works.append([kind, x, h + 6 * done, y]); done += 1
+        self._note = "%d of %d stretches started" % (done, len(todo)); return None
+
     def order_revoke(self, pid, to):
         """Close your roads to a faction you had opened them to (and theirs to you). Everyone who knows you hears of it."""
         if (pid, to) not in self.access: return "you have no access agreement with them"
@@ -953,6 +1010,13 @@ class Game:
                 w[2] -= 1
                 if w[2] <= 0:
                     p.works.remove(w); i = w[1]
+                    if w[0] in ("road", "rail"):
+                        j = w[3]
+                        if self.owner[i] == p.id and self.owner[j] == p.id:
+                            l = 2 if w[0] == "rail" else 1
+                            if self.lk[i].get(j, 0) < l: self.lk[i][j] = self.lk[j][i] = l; self._lkmax = max(self._lkmax, D.RAIL_MOVE if l == 2 else D.ROAD_MOVE); self._roads(i); self._roads(j)
+                            self.event(p.id, "built", "%s P%d-P%d is open" % ("railway" if l == 2 else "road", i, j), key="link", gap=24)
+                        continue
                     if self.owner[i] != p.id: continue
                     if w[0] == "dev": self.dev[i] = min(D.DEV_MAX, self.dev[i] + 1.0)
                     else:
@@ -1009,7 +1073,7 @@ class Game:
         elif fighting == 2: use = D.USE_DEFEND; dr = D.RDY_DEFEND
         elif u.path:
             use = D.USE_IDLE
-            dr = D.RDY_MOVE if u.contact or u.rout or self.owner[pr] != u.owner or pr not in p.supplied else D.RDY_RAIL if self.infra[pr] >= 1.0 else D.RDY_MARCH
+            dr = D.RDY_MOVE if u.contact or u.rout or self.owner[pr] != u.owner or pr not in p.supplied else D.RDY_RAIL if self.infra[pr] >= 1.0 or (u.path and u.path[0] in self.lk[pr]) else D.RDY_MARCH
         elif u.contact: use = D.USE_CONTACT; dr = D.RDY_CONTACT
         else: use = D.USE_IDLE; dr = D.RDY_REST
         use *= k; d = self.depot(u)
@@ -1422,6 +1486,7 @@ class Game:
                 if 0 <= cx < gw and 0 <= cy < gh and (cell[cy * gw + cx] == nxt or (nxt >= S0 and scell[cy * gw + cx] == nxt)):       # crossed the border
                     self._enter(u, nxt); here = nxt
             step = D.SPAN / self.move_cost(u, here)
+            if nxt != here and nxt in self.lk[here]: step *= self.link_speed(u, here, nxt)
             if u.st["dom"] == 0 and (here >= S0) != (nxt >= S0): step *= 0.5          # loading and landing
             elif nxt != here and nxt in provs[here].river and not u.st["dom"] and self.river(here, nxt) and not self.bridged(u.owner, here, nxt): step *= D.RIVER_MOVE
             if step >= d:
@@ -1459,6 +1524,9 @@ class Game:
             self.stock[q] *= 0.25                                # most of the depot is burnt or carried off
             if self.dev[q] > 0 or self.infra[q] > 0:             # a city taken by force is a damaged city
                 self.dev[q] *= D.DEV_SACK; self.infra[q] *= D.INFRA_SACK; self._roads(q)
+            for b_ in self.lk[q]:                              # the rails are torn up or of no use to the newcomer: what is left is a road
+                if self.lk[q][b_] == 2: self.lk[q][b_] = self.lk[b_][q] = 1
+            if self.lk[q]: self._roads(q)
             if old >= 0 and (side, old) in self.access: self._access_end(side, old)
             self.event(side, "took", "P%d" % q)
             if old >= 0:
@@ -1483,7 +1551,7 @@ class Game:
             self.sdirty[p.id] = False
             s = set()
             S0 = self.sea0; rngz = self.searange[p.id]
-            hp = {}; hub = {}; q = []; dist = {}; infra = self.infra; owner = self.owner; acc = set(b for a, b in self.access if a == p.id); IH = D.INFRA_HOP
+            hp = {}; hub = {}; q = []; dist = {}; infra = self.infra; owner = self.owner; acc = set(b for a, b in self.access if a == p.id); IH = D.INFRA_HOP; LH = (1.0, D.ROAD_HOP, D.RAIL_HOP)
             for d in sorted(p.depots):                           # supply spreads from every working depot at once: each province draws on the nearest
                 if owner[d] == p.id and d not in p.depot_build: dist[d] = 0.0; hub[d] = d; heapq.heappush(q, (0.0, d, d))
             link = {}; done = set()
@@ -1513,7 +1581,7 @@ class Game:
                         continue
                     sea = b in self.provs[a].sea
                     if sea and (b in self.cold or a in self.cold): continue          # no shipping into the ice
-                    nd = da + (D.SEA_HOPS if sea else 1.0) / (1.0 + IH * infra[b])
+                    nd = da + (D.SEA_HOPS if sea else 1.0) / (1.0 + IH * infra[b]) * LH[self.lk[a].get(b, 0)]
                     if nd < dist.get(b, 1e18): dist[b] = nd; heapq.heappush(q, (nd, b, h))
             hub = {b: hub[b] for b in hp}
             self.hops[p.id] = hp; self.hub[p.id] = hub; ld = {}
@@ -1556,10 +1624,12 @@ class Game:
                 if a == p.id: vis |= self.players[b].visible
             p.visible = vis; p.explored |= vis
             ko = p.known_owner; kf = p.known_fort; owner = self.owner
-            kd = p.known_dev; dev = self.dev; infra = self.infra
+            kd = p.known_dev; dev = self.dev; infra = self.infra; lk = self.lk; kl = p.known_link
             for i in vis:
                 ko[i] = owner[i]; kf[i] = self.fort_level(i)
                 if dev[i] > 0 or infra[i] > 0 or i in kd: kd[i] = (dev[i], infra[i])
+                if lk[i]:
+                    for b_, l_ in lk[i].items(): kl[(i, b_) if i < b_ else (b_, i)] = l_
             for e in self.players:
                 if e.id != p.id and e.alive:
                     for d in e.depots:

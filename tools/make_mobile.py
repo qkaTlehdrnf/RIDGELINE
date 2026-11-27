@@ -33,7 +33,7 @@ input[type=range]{flex:1;height:32px;accent-color:#58a6ff}
 <div id="mapbox"><canvas id="c"></canvas><div id="tip"></div><div id="ev"></div></div>
 <div id="ctl"><button id="play">▶</button><input id="sl" type="range" min="0" value="0"><button id="spd">1x</button><button id="fit">⤢</button></div>
 <div id="stats"></div>
-<div id="legend">점 = 그 지역의 유닛 수, 빨간 고리 = 돌격 중, 흰 네모 = 보급 거점, 주황 마름모 = 도시(클수록 산출이 큼, 확대하면 이름), ★ = 수도. 지도는 끌고 두 손가락으로 확대, 지역이나 진영을 누르면 자세히.</div>
+<div id="legend">점 = 그 지역의 유닛 수, 빨간 고리 = 돌격 중, 흰 네모 = 보급 거점, 주황 마름모 = 도시(클수록 산출이 큼, 확대하면 이름), ★ = 수도, 연한 갈색 선 = 도로, 검고 흰 점선 = 철도. 지도는 끌고 두 손가락으로 확대, 지역이나 진영을 누르면 자세히.</div>
 <div id="list"></div></div>
 <script>
 const DATA=__DATA__;
@@ -57,6 +57,8 @@ function draw(){if(lastPaint!==fr||lastSel!==sel)paintMap();const r=devicePixelR
  ctx.imageSmoothingEnabled=cam.s<3;ctx.drawImage(off,sx(0),sy(0),GW*cam.s,GH*cam.s);
  ctx.strokeStyle='rgba(70,150,235,.9)';ctx.lineWidth=Math.max(1,cam.s*.35);ctx.lineJoin='round';for(const rv of DATA.rivers||[]){ctx.beginPath();for(let i=0;i<rv.length;i+=2){const x=sx(rv[i]),y=sy(rv[i+1]);i?ctx.lineTo(x,y):ctx.moveTo(x,y)}ctx.stroke()}
  const base=fr*P,o=own[fr],k=Math.max(.6,Math.min(3,cam.s*.9));
+ {const LK=DATA.links||[];if(LK.length){const tt=DATA.t[fr];let j=-1;while(j+1<LK.length&&LK[j+1][0]<=tt)j++;if(j>=0){const r=LK[j];for(const lv of [1,2]){ctx.beginPath();for(let i=1;i<r.length;i+=3){if(r[i+2]!==lv)continue;ctx.moveTo(sx(DATA.px[r[i]]),sy(DATA.py[r[i]]));ctx.lineTo(sx(DATA.px[r[i+1]]),sy(DATA.py[r[i+1]]))}
+   if(lv===1){ctx.setLineDash([]);ctx.strokeStyle='rgba(235,205,150,.9)';ctx.lineWidth=Math.max(.8,cam.s*.25);ctx.stroke()}else{ctx.setLineDash([]);ctx.strokeStyle='#111';ctx.lineWidth=Math.max(1.6,cam.s*.5);ctx.stroke();ctx.setLineDash([Math.max(2,cam.s),Math.max(2,cam.s)]);ctx.strokeStyle='#f2f2f2';ctx.lineWidth=Math.max(.8,cam.s*.25);ctx.stroke();ctx.setLineDash([])}}}}}
  for(let p=0;p<P;p++){const n=cnt[base+p];if(!n||!land[p])continue;const x=sx(DATA.px[p]),y=sy(DATA.py[p]);if(x<-9||y<-9||x>w+9||y>h+9)continue;const rad=k*(0.35+Math.sqrt(n*DATA.div)*.2);
   ctx.beginPath();ctx.arc(x,y,rad,0,7);ctx.fillStyle=(sel>=0&&o[p]!==sel)?'rgba(255,255,255,.2)':'rgba(255,255,255,.75)';ctx.fill();ctx.lineWidth=.5;ctx.strokeStyle='rgba(0,0,0,.5)';ctx.stroke()}
  const bt=DATA.battles[fr]||[];ctx.strokeStyle='#ff3b30';ctx.lineWidth=Math.max(1.5,k);for(const p of bt){ctx.beginPath();ctx.arc(sx(DATA.px[p]),sy(DATA.py[p]),4+3*k,0,7);ctx.stroke()}
@@ -147,7 +149,7 @@ def main():
     data = dict(rivers=rivers, gw=gw // k, gh=gh // k, cells=base64.b64encode(small.astype("<i2").tobytes()).decode(), factions=h["factions"],
                 models=[("Opus" if "opus" in x else "Haiku" if "haiku" in x else x) for x in ml], colors=colors(nf),
                 px=[round(p["cx"] / k, 1) for p in sc["provs"]], py=[round(p["cy"] / k, 1) for p in sc["provs"]], land=[int(p["terrain"] != "water") for p in sc["provs"]],
-                names={str(p["id"]): p["name"] for p in sc["provs"] if p.get("name")}, capitals=sc["capitals"], cities=side.get("cities") or [p["id"] for p in sc["provs"] if p.get("city")], city=side.get("city") or [], cityRef=max(1.0, float(np.median([v for r in (side.get("city") or [[0, 1]])[:1] for v in r[1:]] or [1]))), t=T, owner0=owner0, changes=changes,
+                names={str(p["id"]): p["name"] for p in sc["provs"] if p.get("name")}, capitals=sc["capitals"], cities=side.get("cities") or [p["id"] for p in sc["provs"] if p.get("city")], city=side.get("city") or [], links=side.get("links") or [], cityRef=max(1.0, float(np.median([v for r in (side.get("city") or [[0, 1]])[:1] for v in r[1:]] or [1]))), t=T, owner0=owner0, changes=changes,
                 years=2000 if any(x.get("era") for x in st) else 0, counts=base64.b64encode(np.concatenate(counts).tobytes()).decode(), div=4, battles=battles, depots=dep, side=st, events=events)
     html = PAGE.replace("__TITLE__", title).replace("__DATA__", json.dumps(data, separators=(",", ":"), ensure_ascii=False))
     open(out, "w", encoding="utf-8").write(html); print("wrote", out, "%.2f MB" % (os.path.getsize(out) / 1e6), len(T), "frames")

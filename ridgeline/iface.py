@@ -105,7 +105,7 @@ class Session:
                  "and %d%% of its infrastructure, and land handed over by agreement or gained when a faction falls is undamaged. "
                  "`offer <faction> access` proposes that the two of you open your roads to each other: supply may then pass through the partner's provinces that have infrastructure 1 or more, "
                  "and the markets on both sides of the border count for each other. Either side ends it with `revoke <faction>` (everyone who knows you hears of it); it also ends when one takes land from the other. "
-                 "`q economy` lists your developed provinces, what is being built, upkeep, and the price of the next level; api.provs carries dev, infra, agg, yield_now, room for every province (others' as last seen)."
+                 "`q economy` lists your developed provinces, what is being built, upkeep, and the price of the next level; api.provs carries dev, infra, agg, yield_now, room and links ({neighbour: 1 road | 2 railway} as last seen) for every province (others' as last seen)."
                  % (D.DEV_MAX, D.DEV_START_CITY, D.DEV_START_CAPITAL, D.INFRA_MAX, D.DEV_Y, D.DEV_FLAT, D.DEV_MP, D.AGG, D.LINK, D.LINK_INFRA, D.DEV_ROOM, D.DEV_ROOM_INFRA, -D.DEV_ROOM_RURAL, D.DEV_CHOKE,
                     D.DEV_COST, D.DEV_NEED[1], D.DEV_NEED[0], D.DEV_HOURS, D.INFRA_COST, D.INFRA_NEED[1], D.INFRA_NEED[0], D.INFRA_HOURS, D.DEV_KEEP, D.INFRA_KEEP, D.DEV_GROW,
                     D.INFRA_MOVE, D.INFRA_HOP, D.INFRA_HUB, D.DEV_BATTLE, round(D.DEV_SACK * 100), round(D.INFRA_SACK * 100)))
@@ -261,6 +261,7 @@ class Session:
         L.append("                         from enemy units; ends when nothing unexplored is in reach. Any unit can do it; rec is the fast one.")
         L.append(" recruit <type> [n] [P<city>]     default city: capital")
         L.append(" depot P<id> [weight]    open a depot there, or set the weight of one you have (0 = empty and close it); see DEPOTS")
+        L.append(" road P<a> P<b> | rail P<a> P<b>   build a road / a railway between two provinces of yours (see ROADS AND RAILWAYS); 'q roads'")
         L.append(" develop P<id> | build P<id>     raise a province's development / its infrastructure by one level (see ECONOMY); 'q economy'")
         L.append(" offer <faction> access | revoke <faction>     open your roads to each other / close them again (see ECONOMY)")
         L.append(" research <line>         start the next level of an upgrade line (see UPGRADES); 'q tech' lists every line with what you know about it")
@@ -329,6 +330,17 @@ class Session:
         L.append("WAR: at sea and in the air units fire only at factions you are AT WAR with. You are at war with a faction for %d days after the last real assault on land between you (either way), "
                  "a missile strike, an air or naval attack on ground units, or `declare <faction>`; the other side is told. A pact ends it. On land nothing changes: see FRONTS. api.wars lists whom you are at war with."
                  % (D.WAR_HOURS // 24))
+        L.append("ROADS AND RAILWAYS join two neighbouring provinces (the infrastructure level above is what stands INSIDE one province: streets, yards, stores). "
+                 "`road P<a> P<b>` builds a road, `rail P<a> P<b>` a railway (it replaces the road). Neighbours: that one stretch. Provinces further apart: the shortest way between them through your own supplied land, "
+                 "as many stretches from P<a>'s end as you can pay for now (the reply says how many were started). Both ends of a stretch must be yours%s. "
+                 "One stretch of road costs %d res and %d h, of railway %d res + %d %s and %d h, on open plain; other ground costs in proportion to its movement cost (forest about x1.5, hill x1.75, mountain x2.75), and x%g across a river (it is then a bridge: the river no longer slows or weakens those who hold both banks). "
+                 "Upkeep a day: road %.2f, railway %.2f res per stretch. "
+                 "What they do: land units move x%g along a road and x%g along a railway (the railway only carries its owner's units and those of factions with an access agreement, and not units in contact with the enemy or routed; everyone else uses it as a road); "
+                 "a march along either in your own supplied land costs no readiness; a supply step along a road counts %.1f and along a railway %.1f (so depots reach much further and fronts at the end of a line are fed); "
+                 "and a neighbour joined by road counts +%.2f, by railway +%.2f more towards your market (see ECONOMY). "
+                 "A province taken by force keeps its roads; its railways become roads. Routes (`move`, api.path) take roads and railways into account by themselves. `q roads` lists yours; api.links lists all you have seen."
+                 % ((" and you need the discovery %s for roads and %s for railways" % (D.LINK_NEED["road"], D.LINK_NEED["rail"])) if g.ages else "",
+                    D.ROAD_COST, D.ROAD_HOURS, D.RAIL_COST, D.RAIL_NEED[1], D.RAIL_NEED[0], D.RAIL_HOURS, D.LINK_RIVER, D.ROAD_KEEP, D.RAIL_KEEP, D.ROAD_MOVE, D.RAIL_MOVE, D.ROAD_HOP, D.RAIL_HOP, D.LINK_ROAD, D.LINK_RAIL))
         L.append("CAPITAL: your res is finite and everything draws on the same purse: raising units, their upkeep every day, discoveries and upgrades, refits, development and roads and their upkeep, depots, missiles. "
                  "`q budget` / api.budget show: res in hand, income per day, upkeep per day (units, cities and roads), net per day, how many days the purse lasts at the present rate if net is negative, "
                  "what you have taken in and paid out so far by purpose, upkeep by unit kind, the res tied up in recruitment and research under way, and for every discovery open to you how many days of net income it costs. "
@@ -604,6 +616,7 @@ class Session:
                                  can_dev=g.dev[i] + 1 <= D.DEV_MAX and can(g.dev_cost(i)), can_infra=g.infra[i] + 1 <= D.INFRA_MAX and can(g.infra_cost(i))))
         rows.sort(key=lambda r: (-r["yield_now"], r["prov"]))
         return dict(income=round(p.income, 1), upkeep=round(p.upkeep, 1), maint=round(p.maint, 1), works=[list(w) for w in p.works],
+                    roads=sum(1 for i in g.owned[p.id] for b, l in g.lk[i].items() if l == 1 and (b > i or g.owner[b] != p.id)), rails=sum(1 for i in g.owned[p.id] for b, l in g.lk[i].items() if l == 2 and (b > i or g.owner[b] != p.id)),
                     access=sorted(g.players[b].faction for a, b in g.access if a == p.id), provs=rows)
 
     def depot_view(self):
@@ -759,6 +772,9 @@ class Session:
             err = g.order_cancel(pid, int(toks.pop(0).lstrip("#")))
         elif verb in ("develop", "build"):
             err = g.order_develop(pid, self._prov(toks.pop(0)), "dev" if verb == "develop" else "infra")
+        elif verb in ("road", "rail"):
+            a_ = self._prov(toks.pop(0)); b_ = self._prov(toks.pop(0)); err = g.order_link(pid, a_, b_, verb)
+            if not err: return "ok (%s)" % g._note
         elif verb == "revoke":
             err = g.order_revoke(pid, self._fac(toks.pop(0)))
         elif verb == "depot":
@@ -869,6 +885,11 @@ class Session:
             if k == "army":
                 import json as _j
                 return _j.dumps(self.army_view(int(toks[0]) if toks and toks[0].isdigit() else 0), ensure_ascii=False)
+            if k in ("roads", "rails", "links"):
+                mine = sorted((a_, b_, l_) for (a_, b_), l_ in self.p.known_link.items() if g.owner[a_] == pid or g.owner[b_] == pid)
+                wk = [w for w in self.p.works if w[0] in ("road", "rail")]
+                return "\n".join(["ROADS AND RAILWAYS of yours: %d road, %d rail stretches; being built: %s" % (sum(1 for x in mine if x[2] == 1), sum(1 for x in mine if x[2] == 2), ", ".join("%s P%d-P%d %dh" % (w[0], w[1], w[3], w[2]) for w in wk) or "nothing")] +
+                                 ["%s P%d-P%d" % ("rail" if l_ == 2 else "road", a_, b_) for a_, b_, l_ in mine[:200]])
             if k in ("economy", "eco"):
                 v = self.economy_view()
                 return "\n".join(["ECONOMY income %.1f/day, unit upkeep %.1f, city and road upkeep %.1f; roads open with: %s" % (v["income"], v["upkeep"], v["maint"], " ".join(v["access"]) or "nobody"),
@@ -1136,6 +1157,8 @@ class PolicyApi:
     api.offers_out        [the same with `to`]         api.inbox  [dict(t, frm, text)] the last 20 letters you received
     api.owner_name        {province you know to be someone's: faction name}   whose land is where, as far as you have seen
     api.marks             {type: current model number}; a unit with u.old True is an older model (u.mark) and fights with its old values
+    api.links             [[a, b, level]] every road (level 1) and railway (2) between two provinces that you have seen (your own always current); api.link_rules = the numbers; api.link_cost(a, b, 'road'|'rail') = dict(res[, steel], hours) for that one stretch
+                          works of roads and railways are 4-item lists [kind 'road'|'rail', province, hours left, other province]; economy also has roads, rails (stretches you hold)
     api.economy           dict(income, upkeep, maint, works [[kind 'dev'|'infra', province, hours left]], access [factions sharing roads with you],
                           provs [dict(prov, dev, room, infra, agg, yield_now, base, city, dev_cost, infra_cost, can_dev, can_infra)] richest first)   see ECONOMY
                           provs is a LIST of dicts and holds only your provinces with dev > 0 or infra > 0 (others: api.provs[id]). prov = province id; room = the
@@ -1190,6 +1213,7 @@ class PolicyApi:
         self.marks = {c: s["mark"] for c, s in p.stats.items()}; self.refit_cost = {c: g.refit_cost(p.id, c) for c in p.stats}
         self.old_units = sum(1 for u in g.punits[p.id].values() if u.st is not p.stats[u.type])
         self.economy = sess.economy_view(); kd = p.known_dev
+        self.links = [[a_, b_, l_] for (a_, b_), l_ in sorted(p.known_link.items())]; self.link_rules = dict(road=dict(res=D.ROAD_COST, hours=D.ROAD_HOURS, speed=D.ROAD_MOVE, supply_step=D.ROAD_HOP, keep=D.ROAD_KEEP, needs=D.LINK_NEED["road"]), rail=dict(res=D.RAIL_COST, steel=D.RAIL_NEED[1], hours=D.RAIL_HOURS, speed=D.RAIL_MOVE, supply_step=D.RAIL_HOP, keep=D.RAIL_KEEP, needs=D.LINK_NEED["rail"]), river_factor=D.LINK_RIVER)
         self.depots = sess.depot_view(); self.depot_cost = D.DEPOT_COST; self.enemy_depots = {d: g.players[o].faction for d, o in p.known_depots.items()}
         self.tree = sess.tree_view(); self.known = sorted(p.known); self.year = A.year(g.tick); self.age = A.ERAS[A.era_of(p)]; self.can_raise = sorted(p.stats)
         self.budget = sess.budget_view(); self.sea = sess.sea_view(); self.wars = sorted(e.faction for e in g.players if e.id != pid and e.alive and g.war(pid, e.id))
@@ -1205,6 +1229,7 @@ class PolicyApi:
                                   who=ko.get(pr.id, -1), visible=pr.id in p.visible, harsh=bool(pr.biome), sea=pr.sea, river=sorted(pr.river), coast=list(pr.coast), x=pr.cx, y0=pr.cy, steel=pr.steel, oil=pr.oil, rare=pr.rare, coal=pr.coal, rubber=pr.rubber, lat=pr.lat, cold=pr.id in g.cold, freezes=g.freezes(pr.id, 3), jungle=pr.id in g.jungle,
                                   dev=g.dev[pr.id] if g.owner[pr.id] == pid else kd.get(pr.id, (0.0, 0.0))[0], infra=g.infra[pr.id] if g.owner[pr.id] == pid else kd.get(pr.id, (0.0, 0.0))[1],
                                   agg=g.agg[pr.id] if g.owner[pr.id] == pid else None, yield_now=g.prod[pr.id] if g.owner[pr.id] == pid else None, room=g.room(pr.id) if g.owner[pr.id] == pid else None,
+                                  links={b_: p.known_link.get((pr.id, b_) if pr.id < b_ else (b_, pr.id), 0) for b_ in g.lk[pr.id]} if g.lk[pr.id] else {},
                                   supplied=pr.id in p.supplied) for pr in (g.provs[i] for i in sorted(rel)) if pr.terrain != "water"}
         self.units = [dict(id=u.id, type=u.type, prov=u.prov, str=u.str, path=list(u.path), fighting=bool(u.fighting),
                            supplied=u.supplied, group=u.group, front=u.id in sess.front or u.id in sess.expand, expand=u.id in sess.expand, explore=u.id in sess.explore, rdy=u.rdy, plan=u.plan_t, dom=u.st["dom"], base=u.base, at_sea=u.prov >= g.sea0, xp=u.xp, mor=u.mor, sup=u.sup, state=g.state(u), mark=u.st["mark"], old=u.st is not p.stats[u.type],
@@ -1226,3 +1251,9 @@ class PolicyApi:
     def cmd(self, line): return self._s.act(line)
     def q(self, text): return self._s.query(text)
     def path(self, a, b): return self._s.known_path(a, b)
+
+    def link_cost(self, a, b, kind="road"):
+        """Price of one stretch of road or railway between two neighbouring provinces."""
+        res, k, n, h = self._s.g.link_cost(int(a), int(b), kind); out = dict(res=res, hours=h)
+        if k: out[k] = n
+        return out

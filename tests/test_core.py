@@ -549,6 +549,31 @@ def test_v8_resources_relations_and_climate():
     assert x.str < y.str, "fever"
 
 
+def test_v13_roads_and_railways():
+    from ridgeline.worldgen import gen_world
+    from ridgeline import ages as A
+    g = Game(factions=tuple(w[0] for w in D.WORLD), seed=1, gmap=gen_world(1, scale=1.0), max_ticks=600)
+    p = g.players[26]; s = Session(g, 26); cap = p.capital
+    prev = {cap: cap}; q = [cap]
+    for x in q:
+        for y in g.provs[x].nbrs:
+            if y not in prev and y < g.sea0 and g.owner[y] == 26 and y not in g.provs[x].sea: prev[y] = x; q.append(y)
+    far = q[-1]
+    assert "discovery roads" in s.act("road P%d P%d" % (cap, far))
+    A.finish(g, p, "roads"); p.res = 5000.0; p.bank["steel"] = 500.0
+    h0 = g.hops[26][far]; assert "stretches started" in s.act("road P%d P%d" % (cap, far))
+    for _ in range(100): g.step()
+    assert sum(len(x) for x in g.lk) >= 2 and g.hops[26][far] < h0 and p.maint > 0
+    assert "discovery railways" in s.act("rail P%d P%d" % (cap, far))
+    A.finish(g, p, "railways"); assert s.act("rail P%d P%d" % (cap, far)).startswith("ok")
+    for _ in range(140): g.step()
+    assert any(l == 2 for x in g.lk for l in x.values())
+    u = next(x for x in g.punits[26].values() if x.st["dom"] == 0); b = next(iter(g.lk[cap]))
+    assert g.link_speed(u, cap, b) in (D.RAIL_MOVE, D.ROAD_MOVE) and "rail P" in s.query("roads")
+    assert all((min(a, b_), max(a, b_)) in p.known_link for a in g.owned[26] for b_ in g.lk[a])
+    other = g.players[0]; assert not other.known_link                      # fog: nobody else has seen them
+
+
 def test_v11_ages_sea_air_and_budget():
     from ridgeline import data as D, ages as A
     g = Game("world", seed=1); names = [p.faction for p in g.players]; H = names.index("haedong"); Y = names.index("yamato"); a, b = g.players[H], g.players[Y]
