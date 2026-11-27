@@ -609,6 +609,28 @@ def test_v11_ages_sea_air_and_budget():
     a.visible.add(tgt); assert g.order_strike(H, tgt) is None and len(g.strikes) == 1
 
 
+def test_v14_locals_join_and_prepared_landing():
+    from ridgeline import data as D, ages as A
+    g = Game("world", seed=1); names = [p.faction for p in g.players]; H = names.index("haedong"); a = g.players[H]
+    free = [i for i in range(g.sea0) if g.owner[i] < 0 and g.provs[i].terrain != "water"]
+    assert free and all(g.local[i] > 0 for i in free) and all(g.local[i] == 0 for i in g.owned[H])       # land nobody owns is held by its own people
+    for _ in range(24 * 60): g.step()
+    assert g.join and sum(1 for i in free if g.owner[i] >= 0) > 0                                         # ... and joins its neighbours by and by
+    q = next(i for i in free if g.owner[i] >= 0); assert g.local[q] == 0.0 and q not in g.join
+    # a landing prepared in a port goes over as one wave, keeps its bonus and is supplied on the beach
+    A.finish(g, a, "galleys"); g._sea_update(); a.explored.update(range(g.n)); sa = Session(g, H); ov = PolicyApi(sa, {}).overseas
+    tgt, port = next((i, q) for i in sorted(ov) if g.owner[i] >= 0 and not any(g.owner[b] == H for b in g.provs[i].nbrs)
+                     for q in sorted(g.owned[H]) if set(g.provs[q].coast) & set(g.provs[i].coast))
+    g.set_war(H, g.owner[tgt]); ids = [u.id for u in g.punits[H].values() if u.type == "inf"][:30]; g.order_move(H, ids, port)
+    for _ in range(300): g.step()
+    ids = [i for i in ids if i in g.units and g.units[i].prov == port]; assert len(ids) >= 10 and g.order_prepare(H, ids, tgt) is None
+    for _ in range(30): g.step()
+    assert g.units[ids[0]].plan_b >= 25 and g.order_move(H, ids, tgt) is None
+    us = [g.units[i] for i in ids]; assert all(u.prov >= g.sea0 and u.plan_t == tgt and u.path == [u.prov, tgt] for u in us)
+    for _ in range(150): g.step()
+    us = [g.units[i] for i in ids if i in g.units]; assert sum(u.prov == tgt for u in us) >= len(ids) * 0.6 and all(u.supplied for u in us if u.prov == tgt)
+
+
 if __name__ == "__main__":
     for k, f in list(globals().items()):
         if k.startswith("test_"): f(); print("ok", k)

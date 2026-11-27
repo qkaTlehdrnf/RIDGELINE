@@ -333,4 +333,6 @@ LOCAL_BASE = 2.0; LOCAL_CITY = 4.0; LOCAL_HARSH = 0.5        # militia a free pr
 LOCAL_SPREAD = (0.6, 1.4)                                    # drawn per province and war
 LOCAL_ATK = 8.0; LOCAL_DFN = 12.0                            # per 100 strength, x the nominal power of the locals' age, defence also x terrain cover
 LOCAL_LAG = 2                                                # the locals' weapons are this many ages behind the median faction (never before ancient)
+LOCAL_JOIN = 240.0                                           # years for a free province to join a neighbouring faction of the locals' own age; / (1 + ages that faction is ahead)^2
+LOCAL_JOIN_SHARE = 0.5                                       # pull = this + (1 - this) x the share of the province's land neighbours the faction owns
 LOCAL_HEAL = 0.04                                            # share of their full strength they regain a day when no intruder stands on their land

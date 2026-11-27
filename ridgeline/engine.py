@@ -96,7 +96,7 @@ class Game:
         self.battles = {}; self.contacts = []
         self.assaults = {}; self.battle_log = []     # open assault episodes; finished ones (training data)
         self._sight = {}
-        self.local = [0.0] * self.n; self.local0 = [0.0] * self.n; self.local_era = 0      # militia of the peoples living on land no faction owns: strength now, full strength; their age
+        self.join = {}; self.local = [0.0] * self.n; self.local0 = [0.0] * self.n; self.local_era = 0      # militia of the peoples living on land no faction owns: strength now, full strength; their age
         self._note = ""; self.lk = [dict() for _ in range(self.n)]; self._lkmax = 1.0     # roads (1) and railways (2) to neighbours: lk[a][b] == lk[b][a]
         self.dev = [0.0] * self.n; self.infra = [0.0] * self.n; self.access = set()    # development and infrastructure per province; ordered pairs of factions that opened their roads to each other
         self.prod = [float(pr.y) for pr in self.provs]; self.prod_mp = [float(pr.mp) for pr in self.provs]; self.agg = [1.0] * self.n   # what each province yields now
@@ -193,6 +193,7 @@ class Game:
         if old == new: return
         self.owner[q] = new
         if new >= 0: self.local[q] = 0.0
+        self.join.pop(q, None)
         for o in (old, new):
             if o >= 0: self.sdirty[o] = True; self.vdirty[o] = True; self.ownvis[o] = None
         for a, b in self.access:
@@ -477,6 +478,11 @@ class Game:
                 if sea or self.owner[dst] != pid: u.plan_t = dst                       # a sortie: it fights over that province, then flies home
                 elif dst in self.players[pid].supplied: u.base = dst; u.plan_t = -1    # own supplied land: it moves its base there
             key = (start, u.type)
+            if dom == 0 and u.plan_t == dst and start < self.sea0 and dst not in self.provs[start].nbrs and (start, 0) not in cache:      # a landing prepared across one sea zone goes straight over it
+                rz = self.searange[pid]; blk = self.blockade[pid]; tc = self.provs[dst].coast
+                z = next((z for z in self.provs[start].coast if z in tc and z in rz and z not in blk), None)
+                cache[(start, 0)] = None if z is None else [z, dst]
+            if dom == 0 and u.plan_t == dst and cache.get((start, 0)): cache[key] = cache[(start, 0)]
             if key not in cache:
                 r = self.path(start, dst, u, pid if own_only else None)
                 if r and known is not None and any(i not in known for i in r[:-1]):
@@ -486,9 +492,15 @@ class Game:
             if p is None: bad += 1; continue
             if not p and u.prov == dst: p = [dst]            # already there: walk back to the key point
             u.path = list(p); u.dig = False; u.rout = False; u.settled = False; self.active.add(u.id)
-            if not (u.prov == dst and not u.fighting): self._slot(u, k); k += 1
+            wave = dom == 0 and u.plan_t == dst and len(p) > 1 and all(x >= self.sea0 for x in p[:-1])      # a prepared landing sails as it stands: one wave, not a trickle
+            if wave:
+                pc = self.provs[u.prov]; ox = u.x - pc.cx; oy = u.y - pc.cy; r = (ox * ox + oy * oy) ** 0.5; lim = D.SLOT * len(us) ** 0.5 + 1.0
+                if r > lim: ox *= lim / r; oy *= lim / r
+                u.ox = ox; u.oy = oy
+                if u.prov != p[0]: self._enter(u, p[0])       # they boarded while they prepared
+            elif not (u.prov == dst and not u.fighting): self._slot(u, k); k += 1
             if dom == 2: continue
-            if not (u.plan_t == dst and len(p) == 1): u.plan_t = -1; u.plan_b = 0.0     # a prepared attack only fits its target
+            if not (u.plan_t == dst and (len(p) == 1 or all(x >= self.sea0 for x in p[:-1]))): u.plan_t = -1; u.plan_b = 0.0     # a prepared attack only fits its target (straight in, or straight over the water)
         return "%d unit(s) cannot reach P%d" % (bad, dst) if bad else None
 
     def order_prepare(self, pid, ids, target):
@@ -497,12 +509,15 @@ class Game:
         if not us: return "no units selected"
         n = 0
         if (pid, self.owner[target]) in self.peace: return "P%d belongs to a faction you have a pact with (break it first)" % target
+        S0 = self.sea0; pl = self.players[pid]; rz = self.searange[pid]; blk = self.blockade[pid]
+        tz = set(z for z in getattr(self.provs[target], "coast", ()) if z in rz and z not in blk) if target < S0 and pl.sail > 0 else ()
         for u in us:
-            if target not in self.nb2[u.prov] or u.st["dom"] == 2: continue
+            if u.st["dom"] == 2: continue
+            if target not in self.nb2[u.prov] and not (tz and u.st["dom"] == 0 and u.prov < S0 and any(z in tz for z in self.provs[u.prov].coast)): continue      # next to it, or across one sea zone your shipping can use
             u.path = []; u.prog = 0.0; u.rout = False; u.settled = False; self.active.add(u.id)
             if u.plan_t != target: u.plan_t = target; u.plan_b = 0.0
             n += 1
-        return None if n else "units must stand next to P%d to prepare an attack on it" % target
+        return None if n else "units must stand next to P%d (or on a coast across one sea zone your shipping can use) to prepare an attack on it" % target
 
     def order_hold(self, pid, ids):
         us = self._mine(pid, ids)
@@ -1101,6 +1116,8 @@ class Game:
         if u.sup: u.sup = u.sup * D.SUP_DECAY if k == 1 and u.sup > 1.0 else 0.0
         home = self.owner[pr] == u.owner and pr in p.supplied
         near = home or any(b in p.supplied for b in self.provs[pr].nbrs)
+        if not near and p.sail > 0 and self.provs[pr].coast:     # a beachhead is fed over the water, through a zone your shipping can use
+            rz = self.searange[u.owner]; near = any(z in rz for z in self.provs[pr].coast)
         was = u.supplied; u.supplied = near
         if not home:                                         # campaigning away from home: winter and fever take their share
             loss = 0.0
@@ -1478,6 +1495,7 @@ class Game:
             if u.path:
                 if u.fighting == 1 and not u.rout and not u.st["dom"] and u.prov < S0: continue      # (ships, aircraft and troopships keep going and fire as they pass)
                 nxt = u.path[0]
+                if nxt == u.prov and nxt >= S0 and len(u.path) > 1 and u.path[1] < S0 and not u.st["dom"]: u.path.pop(0); nxt = u.path[0]      # transports make straight for the beach, not for the middle of the zone
                 if nxt != u.prov and nxt not in self.nb2[u.prov]: u.path = []; continue
                 goal = provs[nxt]
             else:
@@ -1537,6 +1555,31 @@ class Game:
         own = self.owner; loc = self.local; l0 = self.local0; pos = self.pos
         for i in range(self.sea0):
             if own[i] < 0 and loc[i] < l0[i] and not any(u.type != "rec" and not u.st["dom"] for u in pos[i]): loc[i] = min(l0[i], loc[i] + D.LOCAL_HEAL * l0[i])
+        if not self.ages: return
+        # free land next to a faction is drawn into it: trade, settlers, marriages, the wish for its tools. Faster the further ahead the faction is.
+        yd = 24.0 * A.CAL_YEARS / A.CAL_HOURS / D.LOCAL_JOIN; le = self.local_era; P = self.provs; sea0 = self.sea0; join = self.join; sh = D.LOCAL_JOIN_SHARE
+        era = [A.era_of(p) if p.alive else -1 for p in self.players]; done = []
+        for i in range(sea0):
+            if own[i] >= 0 or P[i].terrain == "water": continue
+            cnt = {}; n = 0
+            for j in P[i].nbrs:
+                if j < sea0 and P[j].terrain != "water":
+                    n += 1; o = own[j]
+                    if o >= 0: cnt[o] = cnt.get(o, 0) + 1
+            if not cnt: continue
+            jn = join.get(i)
+            if jn is None: jn = join[i] = {}
+            for o in sorted(cnt):
+                v = jn[o] = jn.get(o, 0.0) + yd * (1 + max(0, era[o] - le)) ** 2 * (sh + (1.0 - sh) * cnt[o] / n)
+                if v >= 1.0: done.append((i, o, v))
+        best = {}
+        for i, o, v in done:
+            if i not in best or v > best[i][1]: best[i] = (o, v)
+        for i in sorted(best):
+            o = best[i][0]
+            if any(u.owner != o and u.type != "rec" and not u.st["dom"] for u in pos[i]): continue      # someone else's troops stand there: nothing is settled
+            self._set_owner(i, o)
+            self.event(o, "locals", "the people of P%d have joined you" % i, key="joined", gap=24)
 
     def _capture(self):
         """A province changes hands when a side has a unit at its key point (within CAP_R) and no unit of any

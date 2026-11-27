@@ -164,7 +164,10 @@ class Session:
                  "Attack power is x(0.4+0.6*r/100), defence x(0.7+0.3*r/100). New units start at %d." % (D.RDY_CONTACT, D.RDY_NEW))
         L.append("PREPARED ATTACK: `prepare <sel> P<target>` makes units next to the target plan the attack: +1%% attack per hour "
                  "of waiting up to +%d%% (+%d%% if a rec of yours is next to the target). The bonus applies when they `move` into "
-                 "that target, shrinks 1%%/h while assaulting, and is lost if they are sent anywhere else." % (D.PLAN_MAX, D.PLAN_MAX_EXACT))
+                 "that target, shrinks 1%%/h while assaulting, and is lost if they are sent anywhere else. "
+                 "ACROSS THE WATER: once your troops can go by sea, units standing in a coastal province can also prepare against a province on the far shore of a sea zone both provinces touch "
+                 "(a zone in your shipping's reach and not closed to you); `move` then takes them straight over, together, and the bonus lands with them. "
+                 "api.overseas = {province id: sea zones from your coast} lists every coastal province you have seen that is not yours and that your shipping can reach now." % (D.PLAN_MAX, D.PLAN_MAX_EXACT))
         L.append("EVERY UNIT HAS ITS OWN STATE. EXPERIENCE 0-100 (%s, 20 points each): fire power x(%.2f+%.2f*xp/100) and damage taken "
                  "/(%.2f+%.2f*xp/100). Gained by fighting (+%.2f/h assaulting, +%.2f/h defending, slower near the top, +%g for destroying a unit) "
                  "and slowly by drill at home (up to %d). Replacements arrive green (xp %d), so rebuilding a mauled veteran unit dilutes it. "
@@ -337,8 +340,11 @@ class Session:
                      "api.provs[id]['locals'] and the province lists show the strength as you last saw it). They never leave their province and attack nobody. Units that enter it (scouts excepted) fight them every hour: "
                      "per 100 strength the locals have attack %g and defence %g, times the nominal power of THEIR age, defence also times the terrain's cover; their age is %d ages behind the median faction's (never before ancient). "
                      "Your units' fire is their atk x strength x readiness as in any fight; the locals' fire is spread evenly over your units there. The province can be taken as usual once the militia is at 0. "
-                     "A militia nobody is pressing regains %d%% of its full strength a day, and land that loses its owner fills up again the same way."
-                     % (D.LOCAL_BASE * D.LOCAL_SPREAD[0], D.LOCAL_BASE * D.LOCAL_SPREAD[1], D.LOCAL_CITY, D.LOCAL_HARSH, D.LOCAL_ATK, D.LOCAL_DFN, D.LOCAL_LAG, round(D.LOCAL_HEAL * 100)))
+                     "A militia nobody is pressing regains %d%% of its full strength a day, and land that loses its owner fills up again the same way. "
+                     "Free land also joins a neighbour by itself, without a fight: a faction of the locals' own age that borders a free province draws it in over about %d years (now %d days) if it owns all the land around it, "
+                     "twice as long if it owns almost none; a faction 1, 2, 3 ages ahead of the locals takes a 4th, a 9th, a 16th of that. Several neighbours each fill their own share and the first to be full gets the province, "
+                     "with its militia gone and nothing wrecked; it waits while another faction's troops stand there."
+                     % (D.LOCAL_BASE * D.LOCAL_SPREAD[0], D.LOCAL_BASE * D.LOCAL_SPREAD[1], D.LOCAL_CITY, D.LOCAL_HARSH, D.LOCAL_ATK, D.LOCAL_DFN, D.LOCAL_LAG, round(D.LOCAL_HEAL * 100), D.LOCAL_JOIN, round(D.LOCAL_JOIN * A.CAL_HOURS / A.CAL_YEARS / 24.0)))
         L.append("ROADS AND RAILWAYS join two neighbouring provinces (the infrastructure level above is what stands INSIDE one province: streets, yards, stores). "
                  "`road P<a> P<b>` builds a road, `rail P<a> P<b>` a railway (it replaces the road). Neighbours: that one stretch. Provinces further apart: the shortest way between them through your own supplied land, "
                  "as many stretches from P<a>'s end as you can pay for now (the reply says how many were started). Both ends of a stretch must be yours%s. "
@@ -1206,7 +1212,7 @@ class PolicyApi:
                           upkeep_by_kind {kind: res per day}, units, in_training, res_in_training, research, stock, income_by, fuel_per_day,
                           open_discoveries {discovery: dict(cost, res_now, bought (res of it that buys lacking resources), can_pay_now, lacking [resources], days_of_net_income)})      see CAPITAL
     api.sea               {sea zone id: dict(nbrs [zones], coast [land provinces on its shore], deep, x, y0, visible, reach (zones from your coast, None = beyond your shipping), closed (an enemy fleet shuts it to you), mine (your units there))}
-                          only zones you have seen. api.provs[id]['coast'] = the zones a land province touches. api.transport_speed (0 = your troops cannot go by sea), api.sea_reach, api.ocean
+                          only zones you have seen. api.provs[id]['coast'] = the zones a land province touches. api.transport_speed (0 = your troops cannot go by sea), api.overseas = {id: zones away} coastal provinces not yours that your shipping reaches (see PREPARED ATTACK), api.sea_reach, api.ocean
     api.wars              [factions you are at war with now]      api.missiles, api.satellites (True/False), api.strike_cost
                           api.units rows also have dom (0 land, 1 sea, 2 air), base (aircraft: its base province), at_sea (True for ships and for troops on transports; their prov is then a sea zone id, which is in api.sea, not in api.provs)
     api.mem               dict kept between calls
@@ -1235,6 +1241,13 @@ class PolicyApi:
         self.depots = sess.depot_view(); self.depot_cost = D.DEPOT_COST; self.enemy_depots = {d: g.players[o].faction for d, o in p.known_depots.items()}
         self.tree = sess.tree_view(); self.known = sorted(p.known); self.year = A.year(g.tick); self.age = A.ERAS[A.era_of(p)]; self.can_raise = sorted(p.stats)
         self.budget = sess.budget_view(); self.sea = sess.sea_view(); self.wars = sorted(e.faction for e in g.players if e.id != pid and e.alive and g.war(pid, e.id))
+        self.overseas = {}
+        if p.sail > 0:
+            rz = g.searange[pid]; blk = g.blockade[pid]; ex = p.explored; ow = g.owner
+            for z, d in rz.items():
+                if z in blk: continue
+                for i in g.provs[z].coast:
+                    if ow[i] != pid and i in ex and d < self.overseas.get(i, 99): self.overseas[i] = d
         self.fort_cap = p.fort_cap; self.transport_speed = p.sail; self.sea_reach = p.sea_reach; self.ocean = p.ocean; self.missiles = p.missile; self.satellites = p.sat; self.strike_cost = dict(D.STRIKE)
         self.tech = sess.tech_view(); self.tech_log = [dict(x) for x in p.tech_log]; self.research = [list(r) for r in p.research]
         self.enemy_capitals = dict(p.known_caps); self.enemy_capital = sess._near_cap()
