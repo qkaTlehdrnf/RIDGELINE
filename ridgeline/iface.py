@@ -346,8 +346,10 @@ class Session:
                      "A militia nobody is pressing regains %d%% of its full strength a day, and land that loses its owner fills up again the same way. "
                      "Free land also joins a neighbour by itself, without a fight: a faction of the locals' own age that borders a free province draws it in over about %d years (now %d days) if it owns all the land around it, "
                      "twice as long if it owns almost none; a faction 1, 2, 3 ages ahead of the locals takes a 4th, a 9th, a 16th of that. Several neighbours each fill their own share and the first to be full gets the province, "
-                     "with its militia gone and nothing wrecked; it waits while another faction's troops stand there."
-                     % (D.LOCAL_BASE * D.LOCAL_SPREAD[0], D.LOCAL_BASE * D.LOCAL_SPREAD[1], D.LOCAL_CITY, D.LOCAL_HARSH, D.LOCAL_ATK, D.LOCAL_DFN, D.LOCAL_LAG, round(D.LOCAL_HEAL * 100), D.LOCAL_JOIN, round(D.LOCAL_JOIN * A.CAL_HOURS / A.CAL_YEARS / 24.0)))
+                     "with its militia gone and nothing wrecked; it waits while another faction's troops stand there. "
+                     "The same holds for your own land: a province cut off from every one of your depots (the 'supply cut' event; no way by land, by your shipping or over a partner's roads) stays yours for %d years (now %d days) "
+                     "as long as none of your units other than scouts stands in it; then it goes over to the faction that owns most of the land around it, or to its own people if no faction borders it. Reconnecting it resets the count."
+                     % (D.LOCAL_BASE * D.LOCAL_SPREAD[0], D.LOCAL_BASE * D.LOCAL_SPREAD[1], D.LOCAL_CITY, D.LOCAL_HARSH, D.LOCAL_ATK, D.LOCAL_DFN, D.LOCAL_LAG, round(D.LOCAL_HEAL * 100), D.LOCAL_JOIN, round(D.LOCAL_JOIN * A.CAL_HOURS / A.CAL_YEARS / 24.0), D.LOCAL_CUT, round(D.LOCAL_CUT * A.CAL_HOURS / A.CAL_YEARS / 24.0)))
         if Session.CALLS:
             L.append("CALLING YOUR AUTHOR: a war is long and your standing orders are written before it. Up to %d times in one war your orders can call you back in with api.call_home('why'). "
                      "The war stops at that hour; you are shown your reason, where your faction stands, a review of the war so far and your current file, and you may send a new file, which takes over from that hour (api.mem is kept). "

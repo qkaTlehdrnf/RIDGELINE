@@ -617,6 +617,17 @@ def test_v14_locals_join_and_prepared_landing():
     for _ in range(24 * 60): g.step()
     assert g.join and sum(1 for i in free if g.owner[i] >= 0) > 0                                         # ... and joins its neighbours by and by
     q = next(i for i in free if g.owner[i] >= 0); assert g.local[q] == 0.0 and q not in g.join
+    # land cut off from every depot and left without a garrison goes over to whoever holds the land around it
+    g2 = Game("world", seed=1); pa = g2.players[H]; g2._supply()
+    far = next(i for i in sorted(g2.owned[H]) if i not in pa.depots and all(b >= g2.sea0 or g2.owner[b] == H for b in g2.provs[i].nbrs) and not g2.provs[i].coast)
+    other = (H + 1) % len(g2.players)
+    for b in g2.provs[far].nbrs:
+        g2._set_owner(b, other)
+    for u in list(g2.pos[far]): u.type = "rec"
+    g2._supply(); assert far not in pa.supplied
+    days = int(D.LOCAL_CUT * A.CAL_HOURS / A.CAL_YEARS / 24.0) + 2
+    for _ in range(days): g2._locals_day()
+    assert g2.owner[far] != H and far not in g2.cut
     # a landing prepared in a port goes over as one wave, keeps its bonus and is supplied on the beach
     A.finish(g, a, "galleys"); g._sea_update(); a.explored.update(range(g.n)); sa = Session(g, H); ov = PolicyApi(sa, {}).overseas
     tgt, port = next((i, q) for i in sorted(ov) if g.owner[i] >= 0 and not any(g.owner[b] == H for b in g.provs[i].nbrs)

@@ -96,7 +96,7 @@ class Game:
         self.battles = {}; self.contacts = []
         self.assaults = {}; self.battle_log = []     # open assault episodes; finished ones (training data)
         self._sight = {}
-        self.join = {}; self.local = [0.0] * self.n; self.local0 = [0.0] * self.n; self.local_era = 0      # militia of the peoples living on land no faction owns: strength now, full strength; their age
+        self.cut = {}; self.join = {}; self.local = [0.0] * self.n; self.local0 = [0.0] * self.n; self.local_era = 0      # militia of the peoples living on land no faction owns: strength now, full strength; their age
         self._note = ""; self.lk = [dict() for _ in range(self.n)]; self._lkmax = 1.0     # roads (1) and railways (2) to neighbours: lk[a][b] == lk[b][a]
         self.dev = [0.0] * self.n; self.infra = [0.0] * self.n; self.access = set()    # development and infrastructure per province; ordered pairs of factions that opened their roads to each other
         self.prod = [float(pr.y) for pr in self.provs]; self.prod_mp = [float(pr.mp) for pr in self.provs]; self.agg = [1.0] * self.n   # what each province yields now
@@ -193,7 +193,7 @@ class Game:
         if old == new: return
         self.owner[q] = new
         if new >= 0: self.local[q] = 0.0
-        self.join.pop(q, None)
+        self.join.pop(q, None); self.cut.pop(q, None)
         for o in (old, new):
             if o >= 0: self.sdirty[o] = True; self.vdirty[o] = True; self.ownvis[o] = None
         for a, b in self.access:
@@ -1580,6 +1580,28 @@ class Game:
             if any(u.owner != o and u.type != "rec" and not u.st["dom"] for u in pos[i]): continue      # someone else's troops stand there: nothing is settled
             self._set_owner(i, o)
             self.event(o, "locals", "the people of P%d have joined you" % i, key="joined", gap=24)
+        # land cut off from its owner's supply (no way to any depot by land, by its shipping or over a partner's roads) does not stay loyal for ever:
+        # after LOCAL_CUT years with no garrison it goes over to the faction that holds most of the land around it, or back to its own people.
+        yc = 24.0 * A.CAL_YEARS / A.CAL_HOURS / D.LOCAL_CUT; cut = self.cut; lost = []
+        for p in self.players:
+            if not p.alive or not p.supplied: continue
+            sup = p.supplied
+            for i in sorted(self.owned[p.id]):
+                if i in sup: cut.pop(i, None); continue
+                if i >= sea0: continue
+                v = cut[i] = cut.get(i, 0.0) + yc
+                if v >= 1.0 and not any(u.owner == p.id and u.type != "rec" for u in pos[i]): lost.append((i, p.id))
+        for i, old in lost:
+            cnt = {}
+            for j in P[i].nbrs:
+                o = own[j]
+                if j < sea0 and o >= 0 and o != old: cnt[o] = cnt.get(o, 0) + 1
+            o = min(cnt, key=lambda k: (-cnt[k], k)) if cnt else -1
+            if o >= 0 and any(u.owner != o and u.type != "rec" and not u.st["dom"] for u in pos[i]): continue
+            self._set_owner(i, o)
+            if o < 0: self.local[i] = self.local0[i] * D.LOCAL_HEAL
+            self.event(old, "cut", "P%d, cut off from you for %d years, has gone its own way" % (i, D.LOCAL_CUT), key="cutlost", gap=24)
+            if o >= 0: self.event(o, "locals", "the people of P%d, cut off from %s, have joined you" % (i, self.players[old].faction), key="joined", gap=24)
 
     def _capture(self):
         """A province changes hands when a side has a unit at its key point (within CAP_R) and no unit of any
