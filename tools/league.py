@@ -256,6 +256,7 @@ def play(policies, factions, seed, bmodel, max_ticks, letters=None, on_call=None
             for p in g.players:
                 e = _AG.era_of(p)
                 if not age_t[p.id] or age_t[p.id][-1][1] != _AG.ERAS[e]: age_t[p.id].append((_AG.year(g.tick), _AG.ERAS[e]))
+        if g.tick % 2400 == 0 and not game: print(" war hour %d of %d, %d units" % (g.tick, max_ticks, len(g.units)), flush=True)
         if g.tick % 120 == 0:
             tl.append(dict(t=g.tick, prov=[g.owner.count(i) for i in range(n)], units=[p.n_units for p in g.players],
                            income=[round(p.income - p.upkeep) for p in g.players], mp=[int(p.mp) for p in g.players], assaults=len(g.battles),
