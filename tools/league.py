@@ -9,7 +9,9 @@ its assaults, what happened to it) and its own code, and rewrites its policy how
 Agents never see each other's code. There is no referee deciding which rewrite is "better": the next war does.
 
 Files: runs/league/<faction>/gen<N>.py (the policy), gen<N>.md (what the agent said), runs/league/log.json.
-Agents run on Haiku or Opus only (--model, or --models a,b,c per faction).
+Agents run on Haiku or Opus (--model, or --models a,b,c per faction), or on a model behind an OpenAI-compatible
+endpoint (vLLM, Ollama, llama.cpp, e.g. a local GPU): --model local:<served model name> --endpoint http://127.0.0.1:8000/v1.
+Local calls cost nothing and are logged at $0.
 """
 import json, os, re, subprocess, sys, time
 
@@ -52,7 +54,22 @@ def _map(seed, n, small=False):
     return gen_map(seed, 126, 78, 22, 14, players=n) if small else gen_map(seed, *SIZE, players=n)
 
 
+ENDPOINT = os.environ.get("RIDGELINE_ENDPOINT", "http://127.0.0.1:8000/v1")     # set by --endpoint; used by models named local:<name>
+
+
+def ask_local(model, system, prompt):
+    import urllib.request
+    body = json.dumps(dict(model=model, messages=[dict(role="system", content=system), dict(role="user", content=prompt)],
+                           max_tokens=int(os.environ.get("RIDGELINE_MAX_TOKENS", 12000)), temperature=0.6)).encode()
+    req = urllib.request.Request(ENDPOINT.rstrip("/") + "/chat/completions", body, {"Content-Type": "application/json"})
+    j = json.loads(urllib.request.urlopen(req, timeout=1800).read())
+    text = j["choices"][0]["message"]["content"] or ""
+    if text.count("```") % 2: text += "\n```"          # local models sometimes stop without closing the last block
+    return text, 0.0
+
+
 def ask(model, system, prompt):
+    if model.startswith("local:"): return ask_local(model[6:], system, prompt)
     if not any(k in model.lower() for k in ("haiku", "opus")):
         raise SystemExit("refusing %s: faction agents run on Haiku or Opus only" % model)
     cmd = ["claude", "-p", "--tools", "", "--strict-mcp-config", "--output-format", "json", "--model", model, "--system-prompt", system]
@@ -316,6 +333,12 @@ def caller(factions, models, sample, bmodel, log, outdir, tag, pool, budget, det
     return on_call
 
 
+_PAR_JOB = None
+
+
+def _par_war(seed): return _PAR_JOB(seed)           # forked workers inherit the closure set by main()
+
+
 def main():
     a = sys.argv[1:]
     def opt(k, d, many=False):
@@ -337,10 +360,11 @@ def main():
         _A.set_calendar(int(opt("--calendar", 9216)))             # game hours that stand for the 2,000 years
     max_ticks = int(opt("--max-ticks", 3000)); bmodel = os.path.join(ROOT, "policies", "model.json")
     Session.CALLS = int(opt("--calls", 0)); call_budget = float(opt("--call-budget", 100.0))      # api.call_home: calls per faction and war, and the most all calls of one war may cost (US dollars)
-    global OUT
+    global OUT, ENDPOINT
+    if "--endpoint" in a: ENDPOINT = opt("--endpoint", ENDPOINT)
     if "--out" in a: OUT = os.path.join(ROOT, opt("--out", "runs/league"))
     from concurrent.futures import ThreadPoolExecutor
-    POOL = ThreadPoolExecutor(int(opt("--jobs", 1)))
+    POOL = ThreadPoolExecutor(int(opt("--jobs", 1))); par = int(opt("--par", 1))      # --par: processes for the wars of one generation (one per seed)
     os.makedirs(OUT, exist_ok=True); logf = os.path.join(OUT, "log.json")
     log = json.load(open(logf)) if os.path.exists(logf) and "--resume" in a else dict(factions=factions, models=models, cost=0.0, gens=[])
     n = len(factions)
@@ -383,8 +407,19 @@ def main():
             cur[pid] = f; print(" %s (%s): %s" % (factions[pid], models[pid], how), flush=True)
     for gen in range(start + 1, start + gens + 1):
         t0 = time.time(); live = {}
-        oc = caller(factions, models, sample, bmodel, log, OUT, "gen%d" % (gen - 1), POOL, call_budget, log.get("detail"), lambda pid, f: live.__setitem__(pid, f)) if Session.CALLS else None
-        games = [play(cur, factions, s, bmodel, max_ticks, log.get("letters"), oc) for s in seeds]
+        if par > 1 and len(seeds) > 1:                          # --par N: the wars of one generation run side by side, one process each
+            def one_war(sd):
+                lv = {}; c0 = log.get("cost", 0.0); tp = ThreadPoolExecutor(POOL._max_workers)
+                oc_ = caller(factions, models, sample, bmodel, log, OUT, "gen%d_s%d" % (gen - 1, sd), tp, call_budget, log.get("detail"), lambda pid, f: lv.__setitem__(pid, f)) if Session.CALLS else None
+                return play(cur, factions, sd, bmodel, max_ticks, log.get("letters"), oc_), lv, log.get("cost", 0.0) - c0
+            global _PAR_JOB; _PAR_JOB = one_war
+            import multiprocessing as mp
+            with mp.get_context("fork").Pool(min(par, len(seeds))) as pp: res = pp.map(_par_war, seeds)
+            games = [r_[0] for r_ in res]
+            for _, lv, dc in res: live.update(lv); log["cost"] = log.get("cost", 0.0) + dc      # in seed order, as when run one after another
+        else:
+            oc = caller(factions, models, sample, bmodel, log, OUT, "gen%d" % (gen - 1), POOL, call_budget, log.get("detail"), lambda pid, f: live.__setitem__(pid, f)) if Session.CALLS else None
+            games = [play(cur, factions, s, bmodel, max_ticks, log.get("letters"), oc) for s in seeds]
         for pid, f in live.items(): cur[pid] = f                # the file a faction sent during the war is the one it now holds
         det = log.setdefault("detail", {})
         inbox = log.get("letters") or {}; met = [set(i for g_ in games for i in g_["met"][p_]) for p_ in range(n)]

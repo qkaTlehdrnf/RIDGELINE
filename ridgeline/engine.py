@@ -82,7 +82,7 @@ class Game:
         self.sea0 = getattr(m, "sea0", 0) or self.n; self.seacell = getattr(m, "seacell", None)      # sea zones are the provinces from sea0 on
         self.nb2 = [list(p.nbrs) + [c for c in p.coast if c not in p.nbrs] for p in m.provs]         # neighbours including the shore (land <-> sea zone)
         self.ages = bool(getattr(m, "world", False))                                                 # the 2,000-year tree (world map); small maps start modern
-        self.hostile = {}; self.strikes = []; self._seadirty = True                                  # (a, b) -> hour of the last hostile act; missiles in flight
+        self.hostile = {}; self.strikes = []; self._seadirty = True                                 # (a, b) -> hour of the last hostile act; missiles in flight
         self.stock_hop = D.STOCK_HOP / m.scale          # bigger maps: supply reaches proportionally further
         self.tick = 0; self.max_ticks = max_ticks; self.over = False; self.winner = None
         self.owner = [-1] * self.n
@@ -147,6 +147,7 @@ class Game:
         self.occ = [dict() for _ in range(n)]              # (province, sight range) -> units looking out from there
         self.vdirty = [True] * n; self.sdirty = [True] * n; self.ownvis = [set() for _ in range(n)]
         self._hot = []; self._odirty = True; self._tf = getattr(self, "_tf", {})
+        self._posv = 0; self._icache = {}; self._warv = getattr(self, "_warv", 0)     # unit positions version (for cached intel); wars begun (for a precomputed fire plan)
         for u in self.units.values(): self._add(u)
 
     @property
@@ -158,7 +159,7 @@ class Game:
         self._odirty = bool(v)
 
     def _add(self, u):
-        self.units[u.id] = u; self.punits[u.owner][u.id] = u; self.slices[u.id % D.SLICES].add(u.id)
+        self._posv += 1; self.units[u.id] = u; self.punits[u.owner][u.id] = u; self.slices[u.id % D.SLICES].add(u.id)
         k = (int(u.x / D.BUCKET), int(u.y / D.BUCKET)); u.bk = k
         l = self.grid.get(k)
         if l is None: self.grid[k] = [u]; self.gown[k] = {u.owner: 1}
@@ -185,7 +186,7 @@ class Game:
 
     def _enter(self, u, prov):
         """Unit u steps into another province."""
-        self._look(u, -1); self.pos[u.prov].remove(u); self.pos[prov].append(u); u.last = u.prov; u.prov = prov; self._look(u, 1)
+        self._look(u, -1); self.pos[u.prov].remove(u); self.pos[prov].append(u); u.last = u.prov; u.prov = prov; self._look(u, 1); self._posv += 1
         if u.st["dom"] == 1: self._seadirty = True
 
     def _set_owner(self, q, new):
@@ -240,7 +241,7 @@ class Game:
         if a == b or a < 0 or b < 0: return
         k = (a, b) if a < b else (b, a)
         if not self.war(a, b):
-            self._seadirty = True
+            self._seadirty = True; self._warv += 1                    # (_warv: counts wars begun, so a precomputed fire plan knows it is stale)
             for x, y in ((a, b), (b, a)): self.event(x, "news", "you are now at war with P%d (%s)" % (y, self.players[y].faction), key=("war", y), gap=240)
         self.hostile[k] = self.tick
 
@@ -842,7 +843,7 @@ class Game:
             if b[k] < c[k]: return "need %d %s (have %d)" % (c[k], k, b[k])
         p.res -= c["res"]; p.spent["refit"] += c["res"]
         for k in ("steel", "oil", "rare"): b[k] -= c[k]
-        p.upkeep += cur["upkeep"] - u.st["upkeep"]; u.st = cur; u.rdy = max(0.0, u.rdy - D.REFIT_RDY); self.active.add(u.id)
+        p.upkeep += cur["upkeep"] - u.st["upkeep"]; u.st = cur; self._posv += 1; u.rdy = max(0.0, u.rdy - D.REFIT_RDY); self.active.add(u.id)
         return None
 
     def order_recruit(self, pid, code, prov=None):
@@ -1259,6 +1260,107 @@ class Game:
         mono = {k: (next(iter(c)) if len(c) == 1 else -2) for k, c in self.gown.items()}
         self._warm = set()
         dmg = {}; kby = {}; fights = {}; con = set(); self.battles = {}; mates = {}; gfire = {}; act = self.active; tfc = self._tf; peace = self.peace; ass = self.assaults
+        for u, best, ux in self._fire_plan(mono, hot_units):      # each unit that has a target this hour, in a fixed order
+            st = u.st
+            adv = bool(u.path); u.fighting = 1 if adv else 2; u.hours += 1; act.add(u.id)
+            base = None if adv else max(u.st["atk"], D.HOLD_FIRE * u.st["dfn"])
+            form = 1.0
+            if u.group:                                          # a formation fighting together: at least FORM_MIN of its units in this province
+                gk = (u.owner, u.group, u.prov); c = mates.get(gk)
+                if c is None: c = mates[gk] = sum(1 for o in self.pos[u.prov] if o.owner == u.owner and o.group == u.group)
+                if c >= D.FORM_MIN:
+                    form = 1.0 + D.FORM_ATK * players[u.owner].fxp.get(u.group, 0.0) / 100.0
+                    gfire[(u.owner, u.group)] = gfire.get((u.owner, u.group), 0) + 1
+            u.xp = min(100.0, u.xp + (D.XP_ASSAULT if adv else D.XP_DEFEND) * (1.2 - u.xp / 100.0))      # learning by doing, slower at the top
+            heavy = st["supp"]; ap1 = st["ap"] - 1.0; up = u.prov
+            m0 = (st["atk"] if base is None else base) * u.str * 0.01 * (1.0 if u.supplied else D.UNSUPPLIED_MULT) \
+                * (1.0 - D.RDY_ATK + D.RDY_ATK * u.rdy * 0.01) * (D.DRY_MULT if u.dry else 1.0) \
+                * (D.XP_ATK0 + D.XP_ATK * u.xp * 0.01) * (1.0 - D.MOR_ATK + D.MOR_ATK * u.mor * 0.01) * (1.0 - D.SUP_FIRE * u.sup * 0.01) * form / len(best)
+            for d, tid, t in best:
+                tp = t.prov; tf = tfc.get((u.type, up, tp))
+                if tf is None: tf = tfc[(u.type, up, tp)] = self._ground(u.type, up, tp)
+                pw = m0 * tf
+                if u.plan_t == tp: pw *= 1.0 + u.plan_b * 0.01
+                if adv and tp in provs[up].river and self.river(up, tp): pw *= D.RIVER_ATK      # an opposed river crossing
+                h = t.st["hard"]; td = t.st["dom"]; tdf = t.st["dfn"]
+                if h: pw *= 1.0 + h * ap1                          # armour shrugs off soft weapons; anti-tank weapons tear it open
+                if ux or td or tp >= S0:
+                    if td == 0 and tp >= S0: td = 1; tdf = t.st["dfn"] * D.AT_SEA_DFN
+                    pw *= st["va"] if td == 2 else st["vs"] if td == 1 else st["vg"]
+                    if td == 0 and ux and (u.owner, t.owner) not in self._warm: self._warm.add((u.owner, t.owner)); self.set_war(u.owner, t.owner)
+                if not t.path and not td and tp < S0:                                   # standing: cover from terrain, and from the fort at home
+                    cov = provs[tp].dfn
+                    if owner[tp] == t.owner: cov *= self._fort_div(tp, u.st["pierce"])
+                    if cov > 1.0:
+                        e = ass.get((tp, u.owner))               # positions face one way: attacked from several sides, cover counts for less
+                        if e is not None and e["dirs"] > 1: cov = 1.0 + (cov - 1.0) * (D.FLANK_COVER[1] if e["dirs"] > 2 else D.FLANK_COVER[0])
+                    pw /= cov
+                if t.fighting == 0:
+                    t.fighting = 2 if not t.path else 1
+                    if not t.contact: t.contact = True; hot_units.append(t); act.add(t.id)
+                hit = pw * D.DMG_K * 14.0 / max(0.05, tdf) / (D.XP_DFN0 + D.XP_DFN * t.xp / 100.0)     # veterans use the ground better
+                dmg[tid] = dmg.get(tid, 0.0) + hit; kby[tid] = u
+                t.sup = min(100.0, t.sup + hit * D.SUP_K * heavy)
+                if u.prov != t.prov: con.add((min(u.prov, t.prov), max(u.prov, t.prov)))
+                q = t.prov
+                if adv and owner[q] == t.owner and not ux:       # an assault on province q
+                    f = fights.get((q, u.owner))
+                    if f is None: f = fights[(q, u.owner)] = ({}, {}, [0.0])
+                    f[0][u.id] = u; f[1][tid] = t; f[2][0] += pw
+        self.contacts = [list(c) for c in sorted(con)]
+        for (pid, name), n in gfire.items():                         # a formation learns when it fights as one
+            fx = players[pid].fxp; fx[name] = min(100.0, fx.get(name, 0.0) + D.FORM_GAIN * min(1.0, n / 10.0))
+        for tid in sorted(dmg):
+            t = units.get(tid)
+            if t is not None:
+                x = dmg[tid] * self.rng.uniform(0.8, 1.2); t.str -= x
+                steady = (1.0 - D.MOR_VET * t.xp / 100.0) * (1.0 - D.FORM_MOR * players[t.owner].fxp.get(t.group, 0.0) / 100.0 if t.group else 1.0)
+                t.mor = max(0.0, t.mor - x * D.MOR_DMG * steady)
+        for (prov, side), (att, dfd, pw) in sorted(fights.items()):
+            att = list(att.values()); dfd = list(dfd.values()); t = provs[prov]; lvl = self.fort_level(prov)
+            dirs = set((u.prov if u.prov != prov else u.last) for u in att)
+            self.battles[prov] = dict(att=[u.id for u in att], frm=sorted(d for d in dirs if d != prov), side=side)
+            ep = self.assaults.get((prov, side))
+            if ep is not None:
+                if len(dirs) > ep["dirs"]: ep["dirs"] = len(dirs)
+                if not ep["entered"] and any(u.prov == prov for u in att): ep["entered"] = 1
+            if ep is None:
+                ac = {}
+                for u in att: ac[u.type] = ac.get(u.type, 0) + 1
+                dc = {}
+                for o in dfd: dc[o.type] = dc.get(o.type, 0) + 1
+                ep = self.assaults[(prov, side)] = dict(
+                    t=self.tick, side=side, prov=prov, terrain=t.terrain, city=int(t.city), fort=lvl, dirs=len(dirs),
+                    att_n=len(att), att_str=round(sum(max(0.0, u.str) for u in att)), att_rdy=round(sum(u.rdy for u in att) / len(att)),
+                    att_bonus=round(sum(u.plan_b for u in att if u.plan_t == prov) / len(att)), att_types=ac,
+                    att_stock=round(min(self.stock[d] if d >= 0 else 0 for d in (self.depot(u) for u in att))),
+                    def_n=len(dfd), def_str=round(sum(max(0.0, o.str) for o in dfd)), def_rdy=round(sum(o.rdy for o in dfd) / len(dfd)),
+                    def_types=dc, def_supplied=int(all(o.supplied for o in dfd)), power=round(pw[0], 1), resist=0.0,
+                    sea=int(any(d in t.sea for d in dirs)), a0=0.0, d0=0.0, ids={}, dids={},
+                    aimed=sum(1 for u in att if prov in u.path and u.type != "rec"), entered=int(any(u.prov == prov for u in att)))      # attackers actually ordered into the province (0 = fire in passing)
+                if ep["aimed"]: self.set_war(side, dfd[0].owner)
+            ep["last"] = self.tick
+            for u in att:                                            # units join an assault as they come into range
+                if u.id not in ep["ids"]: ep["ids"][u.id] = (max(0.0, u.str), u.type, u.rdy, u.plan_b if u.plan_t == prov else 0.0, u.xp, u.mor)
+            for o in dfd:
+                if o.id not in ep["dids"]: ep["dids"][o.id] = (max(0.0, o.str), o.type, o.rdy, 0.0, o.xp, o.mor)
+            ep["dirs"] = max(ep["dirs"], len(dirs))
+            self.event(dfd[0].owner, "battle", "P%d attacked from %s" % (prov, ",".join("P%d" % d for d in sorted(dirs))), key=("b", prov), gap=72)
+            self.event(side, "battle", "attacking P%d" % prov, key=("a", prov), gap=72)
+        for tid in sorted(dmg):
+            t = units.get(tid)
+            if t is None: continue
+            if t.str <= 0:
+                k = kby[tid]
+                if k.id in units: k.xp = min(100.0, k.xp + D.XP_KILL); k.mor = min(100.0, k.mor + D.MOR_KILL)
+                self._die(t, k.owner, shock=True)
+            elif (t.str < D.RETREAT_AT or t.mor < D.MOR_BREAK) and not t.rout: self._retreat(t)
+
+    def _fire_plan(self, mono, hot_units):
+        """Which enemies each unit fires at this hour (up to TARGETS nearest in its range, by the rules in _combat). Yields
+        (unit, targets as (d2, id, unit), ux) for every unit with a target, bucket by bucket; marks everyone in a hot bucket as in contact.
+        A generator, so that what one unit's fire changes (a war that starts) is seen by the next. ridgeline/tcore.py does the same on the GPU."""
+        B = D.BUCKET; grid = self.grid; owner = self.owner; S0 = self.sea0; xok = self._xok; peace = self.peace; ass = self.assaults
         for (bx, by), me in mono.items():
             hot = me == -2
             if not hot:
@@ -1325,100 +1427,7 @@ class Game:
                             d = (t.x - uxx) ** 2 + (t.y - uy) ** 2
                             if d <= r2: best.append((d, t.id, t))
                 if not best: continue
-                best.sort(); best = best[:D.TARGETS]
-                adv = bool(u.path); u.fighting = 1 if adv else 2; u.hours += 1; act.add(u.id)
-                base = None if adv else max(u.st["atk"], D.HOLD_FIRE * u.st["dfn"])
-                form = 1.0
-                if u.group:                                          # a formation fighting together: at least FORM_MIN of its units in this province
-                    gk = (u.owner, u.group, u.prov); c = mates.get(gk)
-                    if c is None: c = mates[gk] = sum(1 for o in self.pos[u.prov] if o.owner == u.owner and o.group == u.group)
-                    if c >= D.FORM_MIN:
-                        form = 1.0 + D.FORM_ATK * players[u.owner].fxp.get(u.group, 0.0) / 100.0
-                        gfire[(u.owner, u.group)] = gfire.get((u.owner, u.group), 0) + 1
-                u.xp = min(100.0, u.xp + (D.XP_ASSAULT if adv else D.XP_DEFEND) * (1.2 - u.xp / 100.0))      # learning by doing, slower at the top
-                heavy = st["supp"]; ap1 = st["ap"] - 1.0; up = u.prov
-                m0 = (st["atk"] if base is None else base) * u.str * 0.01 * (1.0 if u.supplied else D.UNSUPPLIED_MULT) \
-                    * (1.0 - D.RDY_ATK + D.RDY_ATK * u.rdy * 0.01) * (D.DRY_MULT if u.dry else 1.0) \
-                    * (D.XP_ATK0 + D.XP_ATK * u.xp * 0.01) * (1.0 - D.MOR_ATK + D.MOR_ATK * u.mor * 0.01) * (1.0 - D.SUP_FIRE * u.sup * 0.01) * form / len(best)
-                for d, tid, t in best:
-                    tp = t.prov; tf = tfc.get((u.type, up, tp))
-                    if tf is None: tf = tfc[(u.type, up, tp)] = self._ground(u.type, up, tp)
-                    pw = m0 * tf
-                    if u.plan_t == tp: pw *= 1.0 + u.plan_b * 0.01
-                    if adv and tp in provs[up].river and self.river(up, tp): pw *= D.RIVER_ATK      # an opposed river crossing
-                    h = t.st["hard"]; td = t.st["dom"]; tdf = t.st["dfn"]
-                    if h: pw *= 1.0 + h * ap1                          # armour shrugs off soft weapons; anti-tank weapons tear it open
-                    if ux or td or tp >= S0:
-                        if td == 0 and tp >= S0: td = 1; tdf = t.st["dfn"] * D.AT_SEA_DFN
-                        pw *= st["va"] if td == 2 else st["vs"] if td == 1 else st["vg"]
-                        if td == 0 and ux and (u.owner, t.owner) not in self._warm: self._warm.add((u.owner, t.owner)); self.set_war(u.owner, t.owner)
-                    if not t.path and not td and tp < S0:                                   # standing: cover from terrain, and from the fort at home
-                        cov = provs[tp].dfn
-                        if owner[tp] == t.owner: cov *= self._fort_div(tp, u.st["pierce"])
-                        if cov > 1.0:
-                            e = ass.get((tp, u.owner))               # positions face one way: attacked from several sides, cover counts for less
-                            if e is not None and e["dirs"] > 1: cov = 1.0 + (cov - 1.0) * (D.FLANK_COVER[1] if e["dirs"] > 2 else D.FLANK_COVER[0])
-                        pw /= cov
-                    if t.fighting == 0:
-                        t.fighting = 2 if not t.path else 1
-                        if not t.contact: t.contact = True; hot_units.append(t); act.add(t.id)
-                    hit = pw * D.DMG_K * 14.0 / max(0.05, tdf) / (D.XP_DFN0 + D.XP_DFN * t.xp / 100.0)     # veterans use the ground better
-                    dmg[tid] = dmg.get(tid, 0.0) + hit; kby[tid] = u
-                    t.sup = min(100.0, t.sup + hit * D.SUP_K * heavy)
-                    if u.prov != t.prov: con.add((min(u.prov, t.prov), max(u.prov, t.prov)))
-                    q = t.prov
-                    if adv and owner[q] == t.owner and not ux:       # an assault on province q
-                        f = fights.get((q, u.owner))
-                        if f is None: f = fights[(q, u.owner)] = ({}, {}, [0.0])
-                        f[0][u.id] = u; f[1][tid] = t; f[2][0] += pw
-        self.contacts = [list(c) for c in sorted(con)]
-        for (pid, name), n in gfire.items():                         # a formation learns when it fights as one
-            fx = players[pid].fxp; fx[name] = min(100.0, fx.get(name, 0.0) + D.FORM_GAIN * min(1.0, n / 10.0))
-        for tid in sorted(dmg):
-            t = units.get(tid)
-            if t is not None:
-                x = dmg[tid] * self.rng.uniform(0.8, 1.2); t.str -= x
-                steady = (1.0 - D.MOR_VET * t.xp / 100.0) * (1.0 - D.FORM_MOR * players[t.owner].fxp.get(t.group, 0.0) / 100.0 if t.group else 1.0)
-                t.mor = max(0.0, t.mor - x * D.MOR_DMG * steady)
-        for (prov, side), (att, dfd, pw) in sorted(fights.items()):
-            att = list(att.values()); dfd = list(dfd.values()); t = provs[prov]; lvl = self.fort_level(prov)
-            dirs = set((u.prov if u.prov != prov else u.last) for u in att)
-            self.battles[prov] = dict(att=[u.id for u in att], frm=sorted(d for d in dirs if d != prov), side=side)
-            ep = self.assaults.get((prov, side))
-            if ep is not None:
-                if len(dirs) > ep["dirs"]: ep["dirs"] = len(dirs)
-                if not ep["entered"] and any(u.prov == prov for u in att): ep["entered"] = 1
-            if ep is None:
-                ac = {}
-                for u in att: ac[u.type] = ac.get(u.type, 0) + 1
-                dc = {}
-                for o in dfd: dc[o.type] = dc.get(o.type, 0) + 1
-                ep = self.assaults[(prov, side)] = dict(
-                    t=self.tick, side=side, prov=prov, terrain=t.terrain, city=int(t.city), fort=lvl, dirs=len(dirs),
-                    att_n=len(att), att_str=round(sum(max(0.0, u.str) for u in att)), att_rdy=round(sum(u.rdy for u in att) / len(att)),
-                    att_bonus=round(sum(u.plan_b for u in att if u.plan_t == prov) / len(att)), att_types=ac,
-                    att_stock=round(min(self.stock[d] if d >= 0 else 0 for d in (self.depot(u) for u in att))),
-                    def_n=len(dfd), def_str=round(sum(max(0.0, o.str) for o in dfd)), def_rdy=round(sum(o.rdy for o in dfd) / len(dfd)),
-                    def_types=dc, def_supplied=int(all(o.supplied for o in dfd)), power=round(pw[0], 1), resist=0.0,
-                    sea=int(any(d in t.sea for d in dirs)), a0=0.0, d0=0.0, ids={}, dids={},
-                    aimed=sum(1 for u in att if prov in u.path and u.type != "rec"), entered=int(any(u.prov == prov for u in att)))      # attackers actually ordered into the province (0 = fire in passing)
-                if ep["aimed"]: self.set_war(side, dfd[0].owner)
-            ep["last"] = self.tick
-            for u in att:                                            # units join an assault as they come into range
-                if u.id not in ep["ids"]: ep["ids"][u.id] = (max(0.0, u.str), u.type, u.rdy, u.plan_b if u.plan_t == prov else 0.0, u.xp, u.mor)
-            for o in dfd:
-                if o.id not in ep["dids"]: ep["dids"][o.id] = (max(0.0, o.str), o.type, o.rdy, 0.0, o.xp, o.mor)
-            ep["dirs"] = max(ep["dirs"], len(dirs))
-            self.event(dfd[0].owner, "battle", "P%d attacked from %s" % (prov, ",".join("P%d" % d for d in sorted(dirs))), key=("b", prov), gap=72)
-            self.event(side, "battle", "attacking P%d" % prov, key=("a", prov), gap=72)
-        for tid in sorted(dmg):
-            t = units.get(tid)
-            if t is None: continue
-            if t.str <= 0:
-                k = kby[tid]
-                if k.id in units: k.xp = min(100.0, k.xp + D.XP_KILL); k.mor = min(100.0, k.mor + D.MOR_KILL)
-                self._die(t, k.owner, shock=True)
-            elif (t.str < D.RETREAT_AT or t.mor < D.MOR_BREAK) and not t.rout: self._retreat(t)
+                best.sort(); yield u, best[:D.TARGETS], ux
 
     def _close_assaults(self):
         """An assault episode ends when the province changes hands (success), or nobody has attacked for 6 h and no
@@ -1469,7 +1478,7 @@ class Game:
 
     def _die(self, u, killer, shock=False):
         if u.id in self.units:
-            del self.units[u.id]; self.pos[u.prov].remove(u); del self.punits[u.owner][u.id]
+            self._posv += 1; del self.units[u.id]; self.pos[u.prov].remove(u); del self.punits[u.owner][u.id]
             self.slices[u.id % D.SLICES].discard(u.id); self.active.discard(u.id); self._look(u, -1)
             self.grid[u.bk].remove(u); c = self.gown[u.bk]
             if c[u.owner] <= 1:
@@ -1743,12 +1752,22 @@ class Game:
         """2 = exact (your unit is adjacent/in contact or a rec sees it), 1 = rough estimate, 0 = not visible."""
         p = self.players[pid]
         if prov not in p.visible: return 0
-        pos = self.pos
-        for b in self.provs[prov].nbrs:
-            if any(x.owner == pid for x in pos[b]): return 2
+        c_ = self._icache.get(pid)
+        if c_ is None or c_[0] != self._posv:             # where pid has units, and its recs' lookouts: kept until a unit moves, appears or goes
+            mine = set(); recs = {}; provs = self.provs
+            for u in self.punits[pid].values():
+                mine.add(u.prov)
+                if u.type == "rec": recs.setdefault(u.prov, []).append(u.st["sight"] + provs[u.prov].elev)
+            c_ = self._icache[pid] = (self._posv, mine, recs)
+        _, mine, recs = c_; nb = self.provs[prov].nbrs
+        for b in nb:
+            if b in mine: return 2
+        for b in nb:
             for c in self.provs[b].nbrs:                  # a rec two provinces away with line of sight
-                for u in pos[c]:
-                    if u.owner == pid and u.type == "rec" and prov in self.sight_from(c, u.st["sight"] + self.provs[c].elev): return 2
+                r = recs.get(c)
+                if r:
+                    for s in r:
+                        if prov in self.sight_from(c, s): return 2
         return 1
 
     def estimate(self, pid, prov):

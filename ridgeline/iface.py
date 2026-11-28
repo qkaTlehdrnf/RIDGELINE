@@ -1011,7 +1011,7 @@ class Session:
     def border(self):
         """Your provinces that touch enemy land (or, before contact, neutral land) -> weight."""
         g, p, pid = self.g, self.p, self.pid; en = {}; ne = {}
-        for i in range(g.n):
+        for i in sorted(g.owned[pid]):
             if g.owner[i] != pid: continue
             w = 0.0; hit = False; neu = False
             for b in g.provs[i].nbrs:
