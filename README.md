@@ -31,7 +31,7 @@ Each faction has a policy file with one function, `tick(api)`, called every six 
 2. All policies fight a war.
 3. Each model receives a review of its own war (what it ordered, what was refused and why, what it won and lost) and rewrites its policy. It also sends feedback on what would make the game easier to control.
 
-Policies are written by Claude Haiku or Claude Opus. A local model behind an OpenAI-compatible endpoint can be used instead. There is no model call during a war, so a 2,000-year war costs nothing to run.
+Policies are written by Claude Haiku or Claude Opus. A local model behind an OpenAI-compatible endpoint can be used instead. Unless mid-war calls are switched on (see below), there is no model call during a war, so a 2,000-year war costs nothing to run.
 
 ## What happened so far
 
@@ -49,6 +49,15 @@ Changes made in response (rules v12, in the repository now):
 - Ages differ far more in power (ancient 0.06 of modern, space 1.5). In a controlled test five modern infantry units clear thirty fortified spearmen almost without loss.
 - Knowledge seeps in from neighbours. A discovery that factions you have met already hold fills up a little every day, and the filled share comes off both its price and its research time.
 - The calendar can be stretched so that one game day is under a year (`--calendar`).
+
+Rules v13 and v14 (in the repository now):
+
+- **Roads and railways.** Factions pay to link their cities; movement and supply run faster along a link.
+- **No empty land.** Land that no faction owns is held by local peoples whose militia must be beaten to take it. Over the centuries their land joins a neighbouring faction by itself, faster towards a neighbour that is ages ahead. In the first 2,000-year war under these rules 5 of 3,651 provinces were still unowned at the end.
+- **Landings.** A force can prepare an attack in a port against a coast one sea zone away, cross in one wave and stay supplied over the beach. Agents see which foreign coasts they can reach; whether to go is theirs to decide.
+- **Calling the author back.** A policy may call `api.call_home(reason)` during a war, at moments it chooses, at most 20 times per faction. The model that wrote the policy then sees the situation and may send a new policy. This is the only model call during a war and it has a spending cap (`--calls`, `--call-budget`).
+
+That war (generation 9 policies, written before these rules): 974 real assaults, 403 won, four factions eliminated, 23 in the space age, still no ships or aircraft.
 
 Earlier findings are kept in the Korean README: why fronts were static, why agents stopped attacking once pacts existed, and what was changed each time.
 
@@ -91,7 +100,7 @@ python tools/league.py --world 1.0 --gens 1 --seeds 1 --max-ticks 600 --next-tic
 
 ## Known limits
 
-- The calendar is compressed; by default one game day stands for about five years.
+- The calendar is compressed; by default one game day stands for about five years (`--calendar 57600` makes it ten months).
 - Carriers are modelled as long-range ships, troop transports are abstract, there are no nuclear weapons, and the map does not wrap across the Pacific.
 - Runs are not bit-identical across processes unless `PYTHONHASHSEED=0` is set.
 - Above roughly 100,000 units an hour of game time takes more than a second.
