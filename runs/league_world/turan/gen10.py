@@ -1,0 +1,547 @@
+WEIGHTS = {"inf": 0.08, "mot": 0.26, "mil": 0.0, "mtn": 0.05, "arm": 0.18,
+           "atg": 0.08, "art": 0.12, "eng": 0.05, "grn": 0.05, "cav": 0.02,
+           "mec": 0.04, "rec": 0.02, "rkt": 0.0, "hvt": 0.0}
+REAR_TYPES = ("rec", "art", "atg", "eng", "rkt")
+HEAVY = ("art", "eng", "arm", "hvt", "rkt")
+DISC_ORDER = ["horse_riding", "iron_working", "masonry", "siege_engines",
+              "roads", "galleys", "stirrup", "pikes_crossbows", "hillmen",
+              "trebuchet", "castles", "sailing", "crop_rotation", "gunpowder",
+              "matchlock", "banking", "navigation", "dragoons", "grenadiers",
+              "steam_power", "railways", "rifling", "steel_guns",
+              "field_engineering", "combustion", "machine_guns", "tanks",
+              "anti_tank_guns", "heavy_artillery", "flight", "mechanisation",
+              "ironclads", "bombers", "heavy_armour", "rocket_artillery",
+              "assault_rifles", "jet_engines", "composite_armour"]
+RESEARCH = ["mining", "farming", "arm.protection", "medicine", "mot.mobility",
+            "logistics", "mot.protection", "arm.weapons", "mot.weapons", "industry",
+            "drill", "discipline", "inf.protection", "drilling", "fieldworks",
+            "staffwork", "refining", "mtn.weapons", "inf.weapons", "conscription"]
+MAX_PLANS = 4
+OFFER_GAP = 96
+PLAN_TIMEOUT = 96
+MIN_ATTACKERS = 5
+DEPOT_GAP = 96
+MAX_DEPOTS = 3
+DEV_GAP = 24
+DEV_RESERVE = 300
+DISC_RESERVE = 150
+REISSUE = 12
+SCOUTS = 4
+NEEDS = ("res", "steel", "oil", "rare", "coal", "rubber")
+
+
+def _pid(x):
+    if isinstance(x, int):
+        return x
+    d = ""
+    for ch in str(x):
+        if ch.isdigit():
+            d += ch
+    return int(d) if d else -1
+
+
+def _ok(s):
+    return isinstance(s, str) and s.startswith("ok")
+
+
+def _ids(lst):
+    return ",".join([str(i) for i in lst])
+
+
+def _count(api, name):
+    try:
+        api.count(name, 1)
+    except Exception:
+        pass
+
+
+def _avail(api):
+    st = api.stock or {}
+    return {"res": api.res, "steel": st.get("steel", 0), "oil": st.get("oil", 0),
+            "rare": st.get("rare", 0), "coal": st.get("coal", 0),
+            "rubber": st.get("rubber", 0)}
+
+
+def _can(c, avail, keep):
+    for k in NEEDS:
+        need = c.get(k, 0) or 0
+        if need > 0 and avail.get(k, 0) - keep.get(k, 0) < need:
+            return False
+    return True
+
+
+def _cities(api):
+    out = [api.capital]
+    for p, pr in api.provs.items():
+        if pr.get("owner") == "me" and pr.get("city") and p != api.capital:
+            out.append(p)
+    return out
+
+
+def _diplomacy(api):
+    m = api.mem
+    last = m.setdefault("dip", {})
+    for o in api.offers_in:
+        if o.get("kind") == "pact":
+            api.cmd("accept %s" % o["id"])
+    pending = set()
+    for o in api.offers_out:
+        pending.add(o.get("to"))
+    sent = 0
+    for f in api.met:
+        if sent >= 2:
+            break
+        if f in api.pacts or f in pending:
+            continue
+        if api.t - last.get(f, -999) < OFFER_GAP:
+            continue
+        api.cmd("offer %s pact 240" % f)
+        last[f] = api.t
+        sent += 1
+
+
+def _discover(api):
+    if len(api.research) >= 2 or api.res < 250:
+        return
+    tree = api.tree or {}
+    for d in DISC_ORDER:
+        t = tree.get(d)
+        if not t or t.get("status") != "open":
+            continue
+        rn = t.get("res_now")
+        if isinstance(rn, dict):
+            need = rn.get("res", 0) or 0
+        else:
+            need = rn or 0
+        if api.res - need < DISC_RESERVE:
+            continue
+        if _ok(api.cmd("research " + d)):
+            _count(api, "disc_started")
+            return
+
+
+def _economy(api):
+    if len(api.research) >= 2 or api.res < 120:
+        return
+    avail = _avail(api)
+    keep = {"res": 90, "oil": 20}
+    for line in RESEARCH:
+        tt = api.tech.get(line)
+        if not tt or tt.get("status") != "open":
+            continue
+        c = tt.get("cost")
+        if not c or not _can(c, avail, keep):
+            continue
+        if _ok(api.cmd("research " + line)):
+            return
+
+
+def _develop(api, m):
+    if api.t < 48 or api.income <= 0 or api.res < 500:
+        return
+    if api.t - m.get("dev_t", -999) < DEV_GAP:
+        return
+    econ = api.economy or {}
+    works = econ.get("works", []) or []
+    if len(works) >= 2:
+        return
+    busy = set()
+    for w in works:
+        try:
+            busy.add(int(w[1]))
+        except Exception:
+            pass
+    for pr in econ.get("provs", []):
+        p = pr.get("prov")
+        if p is None or p in busy:
+            continue
+        dev = pr.get("dev", 0) or 0
+        room = pr.get("room", 0) or 0
+        if dev + 1 > room:
+            continue
+        c = pr.get("dev_cost")
+        if c is None or not pr.get("can_dev", False):
+            continue
+        need = c.get("res", 0) if isinstance(c, dict) else (c or 0)
+        if api.res - need < DEV_RESERVE:
+            continue
+        if _ok(api.cmd("develop P%d" % p)):
+            m["dev_t"] = api.t
+            _count(api, "develop_ordered")
+        return
+
+
+def _depot(api):
+    m = api.mem
+    if api.t < 96 or api.res < 400:
+        return
+    if api.t - m.get("depot_t", -999) < DEPOT_GAP:
+        return
+    ds = api.depots or {}
+    if len(ds) >= MAX_DEPOTS:
+        return
+    cands = []
+    for p, pr in api.provs.items():
+        if pr.get("owner") != "me" or p in ds or p in api.border:
+            continue
+        if not pr.get("supplied") or pr.get("city"):
+            continue
+        cands.append((len(pr.get("nbrs", [])), p))
+    cands.sort(reverse=True)
+    cap = api.capital
+    for _, p in cands[:40]:
+        path = api.path(cap, p)
+        if not path:
+            continue
+        steps = len(path) - 1
+        if steps < 2 or steps > 4:
+            continue
+        if _ok(api.cmd("depot P%d 1" % p)):
+            m["depot_t"] = api.t
+        return
+
+
+def _recruit(api, units, m):
+    if len(units) > 24 and api.income <= 0:
+        return
+    costs = api.unit_costs
+    st = api.stock or {}
+    weights = dict(WEIGHTS)
+    if st.get("rare", 0) >= 40 and st.get("steel", 0) >= 60 and "hvt" in costs:
+        weights["hvt"] = 0.08
+    avail = _avail(api)
+    mp = api.mp
+    have = {}
+    for u in units:
+        have[u["type"]] = have.get(u["type"], 0) + 1
+    cl = _cities(api)
+    made = 0
+    for _ in range(4):
+        n = len(units) + made + 1
+        options = []
+        if have.get("rec", 0) < 2 and api.t < 48 and "rec" in costs:
+            options.append((1e9, "rec"))
+        for typ, w in weights.items():
+            if w <= 0 or typ not in costs:
+                continue
+            options.append((w * n - have.get(typ, 0), typ))
+        options.sort(key=lambda x: x[0], reverse=True)
+        cand = None
+        for d, typ in options:
+            c = costs[typ]
+            if _can(c, avail, {"res": 60}) and (c.get("mp", 0) or 0) <= mp - 4:
+                cand = typ
+                break
+        if cand is None:
+            break
+        c = costs[cand]
+        city = cl[m.get("cidx", 0) % len(cl)]
+        r = api.cmd("recruit %s 1 P%d" % (cand, city))
+        if not _ok(r):
+            m["cidx"] = m.get("cidx", 0) + 1
+            break
+        made += 1
+        have[cand] = have.get(cand, 0) + 1
+        for k in ("res", "steel", "oil", "rare"):
+            avail[k] = avail[k] - (c.get(k, 0) or 0)
+        mp -= (c.get("mp", 0) or 0)
+
+
+def _busy_ids(m):
+    busy = set(m.get("refit", []))
+    for k in m.get("plans", {}):
+        busy.update(m["plans"][k][1])
+    return busy
+
+
+def _refit_old(api, units, m):
+    if api.old_units <= 0 or api.t < 6:
+        return
+    if api.t - m.get("rf_t", -999) < 12:
+        return
+    m["rf_t"] = api.t
+    busy = _busy_ids(m)
+    avail = _avail(api)
+    rc = api.refit_cost or {}
+    batch = {}
+    total = 0
+    for u in units:
+        if total >= 8:
+            break
+        if not u.get("old") or u["id"] in busy or u.get("path"):
+            continue
+        if u.get("state") != "ready" or u.get("dry"):
+            continue
+        if u.get("str", 0) < 60:
+            continue
+        p = u["prov"]
+        pr = api.provs.get(p) or {}
+        if pr.get("owner") != "me" or not pr.get("supplied") or p in api.border:
+            continue
+        typ = u["type"]
+        c = rc.get(typ)
+        if not c or not _can(c, avail, {"res": 150}):
+            continue
+        for k in ("res", "steel", "oil", "rare"):
+            avail[k] = avail[k] - (c.get(k, 0) or 0)
+        batch.setdefault(typ, []).append(u["id"])
+        total += 1
+    for typ, ids in batch.items():
+        api.cmd("refit " + _ids(ids))
+
+
+def _refit(api, units, m):
+    rs = set(m.get("refit", []))
+    cap = api.capital
+    for u in units:
+        i = u["id"]
+        if u.get("path"):
+            continue
+        if i in rs:
+            if u["str"] >= 85:
+                api.cmd("front %d" % i)
+                rs.discard(i)
+        elif u["str"] < 45:
+            if u["prov"] != cap:
+                api.cmd("move %d P%d" % (i, cap))
+            rs.add(i)
+    m["refit"] = list(rs)
+
+
+def _eligible(u, refit, busy):
+    i = u["id"]
+    return (u["str"] >= 45 and u["rdy"] >= 50 and not u.get("path")
+            and u.get("plan", -1) == -1 and i not in refit and i not in busy
+            and u.get("state") in ("ready", "defending", "pinned")
+            and not u.get("dry") and u["type"] != "rec")
+
+
+def _prob(api, tg, atk, srcs, ours, es):
+    md = api.model
+    feats = md.get("features", [])
+    w = md.get("w", [])
+    mean = md.get("mean", [])
+    std = md.get("std", [])
+    z = md.get("b", 0.0)
+    pr = api.provs.get(tg, {})
+    terr = str(pr.get("terrain", "plain"))
+    tdfn = 1.0
+    if "forest" in terr:
+        tdfn = 1.25
+    elif "hill" in terr:
+        tdfn = 1.5
+    elif "mount" in terr:
+        tdfn = 2.0
+    fort = float(pr.get("fort", 0) or 0)
+    city = 1.0 if pr.get("city") else 0.0
+    n = float(len(atk)) if atk else 1.0
+    heavy = 0.0
+    rdy = 0.0
+    for u in atk:
+        rdy += u["rdy"]
+        if u["type"] in HEAVY:
+            heavy += 1.0
+    heavy = heavy / n
+    rdy = rdy / n / 100.0
+    vals = {"log_ratio": math.log((ours / 100.0 + 1.0) / (es / 100.0 + 1.0)),
+            "terrain_dfn": tdfn, "fort": fort, "city": city, "bonus": 0.5,
+            "att_rdy": rdy, "heavy_share": heavy, "dirs": float(len(set(srcs)))}
+    for j, f in enumerate(feats):
+        if j >= len(w) or j >= len(mean) or j >= len(std):
+            break
+        x = vals.get(f, 0.0)
+        sd = std[j] if std[j] else 1.0
+        z += w[j] * (x - mean[j]) / sd
+    if z > 30:
+        z = 30.0
+    if z < -30:
+        z = -30.0
+    return 1.0 / (1.0 + math.exp(-z))
+
+
+def _attack(api, units, m):
+    t = api.t
+    byid = {}
+    by_prov = {}
+    for u in units:
+        byid[u["id"]] = u
+        by_prov.setdefault(u["prov"], []).append(u)
+    plans = m.get("plans", {})
+    pact_names = set(api.pacts.keys())
+
+    for k in list(plans.keys()):
+        rec = plans[k]
+        tt, ids = rec[0], rec[1]
+        wait = rec[2] if len(rec) > 2 else 40
+        tgt = int(k)
+        live = [i for i in ids if i in byid and byid[i].get("plan", -1) == tgt]
+        if not live or t - tt > PLAN_TIMEOUT:
+            if live:
+                api.cmd("hold " + _ids(live))
+            del plans[k]
+            continue
+        if api.owner_name.get(tgt) in pact_names:
+            api.cmd("hold " + _ids(live))
+            del plans[k]
+            continue
+        if t - tt >= wait:
+            if len(live) < MIN_ATTACKERS - 1:
+                api.cmd("hold " + _ids(live))
+                _count(api, "plan_cancel_thin")
+                del plans[k]
+                continue
+            api.cmd("move %s P%d" % (_ids(live), tgt))
+            _count(api, "assault_launched")
+            del plans[k]
+
+    if len(plans) >= MAX_PLANS or t < 12:
+        m["plans"] = plans
+        return
+
+    busy = _busy_ids(m)
+    refit = set(m.get("refit", []))
+    cands = []
+    seen = set()
+    for tg, tp in api.provs.items():
+        if tp.get("owner") != "enemy" or tg in seen:
+            continue
+        if api.owner_name.get(tg) in pact_names:
+            continue
+        srcs = []
+        ids = []
+        atk = []
+        for nb in tp.get("nbrs", []):
+            sp = _pid(nb)
+            s_pr = api.provs.get(sp)
+            if not s_pr or s_pr.get("owner") != "me":
+                continue
+            for u in by_prov.get(sp, []):
+                if _eligible(u, refit, busy):
+                    ids.append(u["id"])
+                    atk.append(u)
+                    srcs.append(sp)
+        if not ids:
+            continue
+        seen.add(tg)
+        ours = 0.0
+        for u in atk:
+            ours += u["str"]
+        e = api.enemy.get(tg)
+        if e:
+            es = float(e.get("str", 0))
+            if not e.get("exact", False):
+                es *= 1.3
+        else:
+            es = 40.0
+        fort = float(tp.get("fort", 0) or 0)
+        need = 4.0 if fort < 3 else 6.0
+        if len(atk) < MIN_ATTACKERS:
+            _count(api, "skip_too_few")
+            continue
+        if ours < need * es + 150.0:
+            _count(api, "skip_weak")
+            continue
+        if api.model and api.model.get("w"):
+            if _prob(api, tg, atk, srcs, ours, es) < 0.6:
+                _count(api, "skip_prob")
+                continue
+        cands.append((ours / (es + 60.0), tg, ids))
+
+    cands.sort(key=lambda x: x[0], reverse=True)
+    used = set()
+    for margin, tg, ids in cands:
+        if len(plans) >= MAX_PLANS:
+            break
+        if str(tg) in plans:
+            continue
+        ids2 = [i for i in ids if i not in used]
+        if len(ids2) < MIN_ATTACKERS:
+            continue
+        r = api.cmd("prepare %s P%d" % (_ids(ids2), tg))
+        if _ok(r):
+            wait = 30 if margin >= 6.0 else 48
+            plans[str(tg)] = [t, ids2, wait]
+            used.update(ids2)
+            _count(api, "plan_made")
+    m["plans"] = plans
+
+
+def _assign(api, units, m):
+    so = m.setdefault("so", {})
+    if len(so) > 20000:
+        so.clear()
+    refit = set(m.get("refit", []))
+    busy = _busy_ids(m)
+    t = api.t
+    nb = len(api.neutral_border)
+    scouts = 0
+    for u in units:
+        if u.get("explore"):
+            scouts += 1
+    for u in units:
+        i = u["id"]
+        if i in refit or i in busy:
+            continue
+        if u.get("path") or u.get("front") or u.get("expand") or u.get("explore"):
+            continue
+        if u.get("plan", -1) != -1:
+            continue
+        if u.get("state") in ("moving", "assault", "preparing", "routing", "digging"):
+            continue
+        if t - so.get(i, -999) < REISSUE:
+            continue
+        typ = u["type"]
+        so[i] = t
+        if typ == "rec" and scouts < SCOUTS:
+            api.cmd("explore %d" % i)
+            scouts += 1
+        elif typ in REAR_TYPES or nb == 0:
+            api.cmd("front %d" % i)
+        else:
+            api.cmd("expand %d" % i)
+
+
+def tick(api):
+    m = api.mem
+    m["n"] = m.get("n", 0) + 1
+    units = api.units
+    try:
+        _diplomacy(api)
+    except Exception:
+        pass
+    try:
+        _refit(api, units, m)
+    except Exception:
+        pass
+    try:
+        _refit_old(api, units, m)
+    except Exception:
+        pass
+    try:
+        _attack(api, units, m)
+    except Exception:
+        pass
+    try:
+        _assign(api, units, m)
+    except Exception:
+        pass
+    try:
+        _recruit(api, units, m)
+    except Exception:
+        pass
+    try:
+        _discover(api)
+    except Exception:
+        pass
+    try:
+        _economy(api)
+    except Exception:
+        pass
+    try:
+        _develop(api, m)
+    except Exception:
+        pass
+    try:
+        _depot(api)
+    except Exception:
+        pass

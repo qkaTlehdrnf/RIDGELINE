@@ -1,0 +1,33 @@
+{"gen": 10, "summary": ["war 10 with gen9 policy: places 4, final provinces 401", "war 10 with gen9 policy: places 9, final provinces 137", "war 10 with gen9 policy: places 6, final provinces 230", "war 10 with gen9 policy: places 15, final provinces 73", "war 10 with gen9 policy: places 17, final provinces 39", "war 10 with gen9 policy: places 8, final provinces 144", "war 10 with gen9 policy: places 12, final provinces 91", "war 10 with gen9 policy: places 22, final provinces 0", "war 10 with gen9 policy: places 23, final provinces 0", "war 10 with gen9 policy: places 13, final provinces 82", "war 10 with gen9 policy: places 3, final provinces 456", "war 10 with gen9 policy: places 19, final provinces 31", "war 10 with gen9 policy: places 24, final provinces 0", "war 10 with gen9 policy: places 10, final provinces 104", "war 10 with gen9 policy: places 18, final provinces 37", "war 10 with gen9 policy: places 2, final provinces 624", "war 10 with gen9 policy: places 25, final provinces 0", "war 10 with gen9 policy: places 11, final provinces 96", "war 10 with gen9 policy: places 26, final provinces 0", "war 10 with gen9 policy: places 20, final provinces 23", "war 10 with gen9 policy: places 27, final provinces 0", "war 10 with gen9 policy: places 28, final provinces 0", "war 10 with gen9 policy: places 29, final provinces 0", "war 10 with gen9 policy: places 14, final provinces 81", "war 10 with gen9 policy: places 30, final provinces 0", "war 10 with gen9 policy: places 1, final provinces 472", "war 10 with gen9 policy: places 31, final provinces 0", "war 10 with gen9 policy: places 21, final provinces 11", "war 10 with gen9 policy: places 16, final provinces 61", "war 10 with gen9 policy: places 5, final provinces 241", "war 10 with gen9 policy: places 7, final provinces 213"], "secs": 54234}
+ cascadia: written
+ laurentia: written
+ anahuac: written
+ granada: written
+ andea: written
+ amazonia: written
+ platina: written
+ albion: written
+ gallia: written
+ iberia: written
+ germania: written
+ scandia: written
+ sarmatia: written
+ muscovy: written
+ anatolia: written
+ maghreb: written
+ nilotica: written
+ sahelia: written
+ abyssinia: written
+ kongo: written
+ austral: written
+ persia: written
+ arabia: written
+ hindustan: written
+ turan: written
+ siberia: written
+ zhongyuan: written
+ yamato: written
+ nusantara: written
+ oceania: written
+ haedong: written
+cost $31.08; current policies: ['runs/league_world/cascadia/gen10.py', 'runs/league_world/laurentia/gen10.py', 'runs/league_world/anahuac/gen10.py', 'runs/league_world/granada/gen10.py', 'runs/league_world/andea/gen10.py', 'runs/league_world/amazonia/gen10.py', 'runs/league_world/platina/gen10.py', 'runs/league_world/albion/gen10.py', 'runs/league_world/gallia/gen10.py', 'runs/league_world/iberia/gen10.py', 'runs/league_world/germania/gen10.py', 'runs/league_world/scandia/gen10.py', 'runs/league_world/sarmatia/gen10.py', 'runs/league_world/muscovy/gen10.py', 'runs/league_world/anatolia/gen10.py', 'runs/league_world/maghreb/gen10.py', 'runs/league_world/nilotica/gen10.py', 'runs/league_world/sahelia/gen10.py', 'runs/league_world/abyssinia/gen10.py', 'runs/league_world/kongo/gen10.py', 'runs/league_world/austral/gen10.py', 'runs/league_world/persia/gen10.py', 'runs/league_world/arabia/gen10.py', 'runs/league_world/hindustan/gen10.py', 'runs/league_world/turan/gen10.py', 'runs/league_world/siberia/gen10.py', 'runs/league_world/zhongyuan/gen10.py', 'runs/league_world/yamato/gen10.py', 'runs/league_world/nusantara/gen10.py', 'runs/league_world/oceania/gen10.py', 'runs/league_world/haedong/gen10.py']
